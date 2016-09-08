@@ -1,10 +1,21 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
 	"net"
-	"os"
+	// "time"
 )
+
+//TODO:
+// -- Ensure HTTP/S
+// -- TCP server that accpets only the above protocol
+// -- Define Payload struct and parse header/body
+// -- Define worker, collector and dispatcher
+// -- Test with connection
+// -- Implement timeout
+// --
 
 const (
 	CONN_HOST = "localhost"
@@ -13,11 +24,18 @@ const (
 )
 
 func main() {
+	var (
+		NWorkers = flag.Int("n", 4, "The number of workers to start")
+	)
+	// Parse the command-line flags.
+	flag.Parse()
+	//starts the dispatcher
+	StartDispatcher(*NWorkers)
 	//listen for incoming connections
 	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
 		fmt.Println("Error listening: ", err.Error())
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	//Close the listener when the app closes
@@ -30,25 +48,10 @@ func main() {
 		connection, err := listen.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
-			os.Exit(1)
+			log.Fatal(err)
 		}
-		//Handle connetions in a goroutine
-		go handleServerConnection(connection)
+
+		go Collector(connection)
 	}
 
-}
-
-// Handles incoming requests.
-func handleServerConnection(conn net.Conn) {
-	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
-	// Read the incoming connection into the buffer.
-	_, err := conn.Read(buf)
-	if err != nil {
-		fmt.Println("Error reading:", err.Error())
-	}
-	// Send a response back to person contacting us.
-	conn.Write([]byte("Message received. \n"))
-	// Close the connection when you're done with it.
-	conn.Close()
 }
