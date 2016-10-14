@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -34,24 +33,27 @@ func (w *Worker) Start() {
 		for {
 			// Add ourselves into the worker queue.
 			w.WorkerQueue <- w.Work
-			timeoutDuration := 300 * time.Millisecond
-			fmt.Println(timeoutDuration)
 			select {
 			case work := <-w.Work:
 				// Receive a work request.
+				// Makes buffer no bigger than 2048 bytes
 				buf := make([]byte, 2048)
-				//timeout := work.Connection.SetReadDeadline(time.Now().Add(timeoutDuration))
+				// Sets a read dead line. If it doesn't recieve any information
+				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 				_, err := work.Connection.Read(buf)
 				if err != nil {
 					fmt.Println("Error reading:", err.Error())
-					log.Fatal(err)
-
+					Logger(err)
+					work.Connection.Write([]byte("Error I/O timeout. \n"))
+					work.Connection.Close()
 				}
+				//Testing to see what the remote addr is.
+				fmt.Println("remote addr is: ", work.Connection.RemoteAddr())
+				//Print the buffer
+				fmt.Printf("%s\n", buf)
 				// Send a response back to person contacting us.
-				work.Connection.Write([]byte("Message received. \n"))
+				work.Connection.Write([]byte("HTML response would go here. \n"))
 				work.Connection.Close()
-				fmt.Printf("worker%d: Received work request\n", w.ID, work.Connection)
-				fmt.Printf("worker%d: \n", w.ID, work.Connection)
 
 			case <-w.QuitChan:
 				// We have been asked to stop.

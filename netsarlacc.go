@@ -5,17 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net"
-	// "time"
 )
 
 //TODO:
 // -- Ensure HTTP/S
 // -- TCP server that accpets only the above protocol
-// -- Define Payload struct and parse header/body
-// -- Define worker, collector and dispatcher
-// -- Test with connection
-// -- Implement timeout
-// --
+// -- Test with real connections
+//
 
 const (
 	CONN_HOST = "localhost"
@@ -36,6 +32,7 @@ func main() {
 	if err != nil {
 		fmt.Println("Error listening: ", err.Error())
 		log.Fatal(err)
+		Logger(err)
 	}
 
 	//Close the listener when the app closes
@@ -49,6 +46,7 @@ func main() {
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			log.Fatal(err)
+			Logger(err)
 		}
 
 		go Collector(connection)
