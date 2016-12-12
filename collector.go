@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	// "fmt"
 	"net"
 )
 
@@ -13,7 +13,6 @@ var WorkQueue = make(chan WorkRequest, 100)
 
 // Reveive incoming work request (connections) and add them to the work queue
 func Collector(conn net.Conn) {
-	fmt.Printf("%s\n", conn)
 	work := WorkRequest{Connection: conn}
 	WorkQueue <- work
 }

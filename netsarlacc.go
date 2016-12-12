@@ -5,13 +5,25 @@ import (
 	"fmt"
 	"log"
 	"net"
+	// "reflect"
 )
 
 //TODO:
 // -- Ensure HTTP/S
-// -- TCP server that accpets only the above protocol
+// -- TCP server that accpets only the above protocol with the following methods: Head, Put, Post, Get
+// -- Determine a payload struct for headers
+// -- ALL CAPS letters for headers up to 20 bytes up to space
+// -- URL encoding then space
+// -- http 1.1 etc
+// -- encode whole raw packet up to 4kb in one of the fileds in JSON whether it was valid or not
+// -- Stress testing APACHE for golang
+// -- Test cases
+// -- Build Template for response
+// -- Test speed and race conditions
 // -- Test with real connections
-//
+// -- Format for writing to files
+// -- check connection http if not drop
+// --
 
 const (
 	CONN_HOST = "localhost"
@@ -48,7 +60,6 @@ func main() {
 			log.Fatal(err)
 			Logger(err)
 		}
-
 		go Collector(connection)
 	}
 

@@ -5,7 +5,7 @@ import "fmt"
 var WorkerQueue chan chan WorkRequest
 
 func StartDispatcher(nworkers int) {
-	// First, initialize the channel we are going to but the workers' work channels into.
+	// First, initialize the channel we are going to put the workers' work channels into.
 	WorkerQueue = make(chan chan WorkRequest, nworkers)
 
 	// Now, create all of our workers.

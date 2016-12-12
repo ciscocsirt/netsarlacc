@@ -2,6 +2,12 @@ package main
 
 import (
 	"fmt"
+	// "net"
+	// "bytes"
+	"strings"
+	//"encoding/gob"
+	"bufio"
+	"regexp"
 	"time"
 )
 
@@ -37,20 +43,49 @@ func (w *Worker) Start() {
 			case work := <-w.Work:
 				// Receive a work request.
 				// Makes buffer no bigger than 2048 bytes
-				buf := make([]byte, 2048)
-				// Sets a read dead line. If it doesn't recieve any information
+				buf := make([]byte, 4000)
+				// Total request reads no more than 4kb set caps
+				// Sets a read dead line. If it doesn't receive any information
+				// Check to see if it'll accept trickled data
+				// Whole transaction time no more than 500 mili
+				//
+				//work.Connection.SetReadBuffer()
 				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+				//timer := time.NewTimer(time.Millisecond * 500)
+				// Go utility for parsing headers
+				// Buffer to stream reader then loop over each line
+				//
 				_, err := work.Connection.Read(buf)
 				if err != nil {
 					fmt.Println("Error reading:", err.Error())
 					Logger(err)
+					// Hex encode all error data
 					work.Connection.Write([]byte("Error I/O timeout. \n"))
 					work.Connection.Close()
 				}
-				//Testing to see what the remote addr is.
-				fmt.Println("remote addr is: ", work.Connection.RemoteAddr())
 				//Print the buffer
-				fmt.Printf("%s\n", buf)
+				//n := bytes.IndexByte(buf, 45)
+				s := string(buf[:])
+				requestField := strings.Split(s, "\n")
+				headRegex, _ := regexp.Compile("HTT(P|PS)\\/*.*")
+				if headRegex.MatchString(requestField[0]) != true {
+					work.Connection.Close()
+				} else {
+					// fmt.Printf("%s\n", buf)
+					headerIndex := strings.LastIndex(s, "\r\n")
+					headerFields := string(buf[:headerIndex-2])
+					bodyField := string(buf[headerIndex:])
+					scanner := bufio.NewScanner(strings.NewReader(headerFields))
+					for scanner.Scan() {
+						for scanner.Scan() {
+							//TODO add comparison with header fields
+							//scanner.Text()
+						}
+						if err := scanner.Err(); err != nil {
+							fmt.Println("Error reading headers:", err)
+						}
+					}
+				}
 				// Send a response back to person contacting us.
 				work.Connection.Write([]byte("HTML response would go here. \n"))
 				work.Connection.Close()
