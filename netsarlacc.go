@@ -9,7 +9,6 @@ import (
 )
 
 //TODO:
-// -- Ensure HTTP/S
 // -- TCP server that accpets only the above protocol with the following methods: Head, Put, Post, Get
 // -- Determine a payload struct for headers
 // -- ALL CAPS letters for headers up to 20 bytes up to space
@@ -23,7 +22,7 @@ import (
 // -- Test with real connections
 // -- Format for writing to files
 // -- check connection http if not drop
-// --
+// -- \r\n is the end of the header
 
 const (
 	CONN_HOST = "localhost"

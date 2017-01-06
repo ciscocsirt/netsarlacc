@@ -4,10 +4,10 @@ import (
 	"fmt"
 	// "net"
 	// "bytes"
-	"strings"
-	//"encoding/gob"
 	"bufio"
+	"encoding/hex"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -30,6 +30,28 @@ type Worker struct {
 	Work        chan WorkRequest
 	WorkerQueue chan chan WorkRequest
 	QuitChan    chan bool
+}
+
+type Header struct {
+	Method         string `json:"http_method"`
+	User_Agent     string `json:"user_agent"`
+	Content_Length string `json:"bytes_client"`
+	Host           string `json:"url"`
+	Referer        string `json:"http_referer"`
+}
+
+type Body struct {
+	Body string
+}
+
+type ValidRequest struct {
+	Timestamp string `json:"timestamp"`
+	Header
+	// Source IP
+	// Dest IP
+	// dest_port
+	// src_port
+	Raw_Data Body `json:"raw_data"`
 }
 
 // This function "starts" the worker by starting a goroutine, that is
@@ -55,7 +77,7 @@ func (w *Worker) Start() {
 				// Go utility for parsing headers
 				// Buffer to stream reader then loop over each line
 				//
-				_, err := work.Connection.Read(buf)
+				bufSize, err := work.Connection.Read(buf)
 				if err != nil {
 					fmt.Println("Error reading:", err.Error())
 					Logger(err)
@@ -63,27 +85,47 @@ func (w *Worker) Start() {
 					work.Connection.Write([]byte("Error I/O timeout. \n"))
 					work.Connection.Close()
 				}
-				//Print the buffer
-				//n := bytes.IndexByte(buf, 45)
 				s := string(buf[:])
-				requestField := strings.Split(s, "\n")
+				requestLines := strings.Split(s, "\n")
 				headRegex, _ := regexp.Compile("HTT(P|PS)\\/*.*")
-				if headRegex.MatchString(requestField[0]) != true {
+				if !headRegex.MatchString(requestLines[0]) {
+					//  Remove below line after testing
+					work.Connection.Write([]byte("Non http \n"))
 					work.Connection.Close()
 				} else {
 					// fmt.Printf("%s\n", buf)
-					headerIndex := strings.LastIndex(s, "\r\n")
-					headerFields := string(buf[:headerIndex-2])
-					bodyField := string(buf[headerIndex:])
+					headerIndex := strings.LastIndex(s, "\r\n") - 2
+					headerFields := string(buf[:headerIndex])
+					method := strings.Fields(requestLines[0])[0]
+					bodyField := Body{Body: hex.EncodeToString(buf[headerIndex:bufSize])}
+					fmt.Println(bodyField)
+					validResponse := make(map[string]string)
+					fullResponse := make(map[string]string)
+					// Regex to compare headers
+					fieldsRegex, _ := regexp.Compile("^(User-Agent:)|(Host)|(Referer:)|(Accept-Language:)|(Accept-Encoding:)|(Connection:)")
 					scanner := bufio.NewScanner(strings.NewReader(headerFields))
 					for scanner.Scan() {
 						for scanner.Scan() {
-							//TODO add comparison with header fields
-							//scanner.Text()
+							if fieldsRegex.MatchString(scanner.Text()) {
+								value := strings.Split(scanner.Text(), ":")
+								validResponse[value[0]] = strings.Join(value[1:len(value)], " ")
+							}
+							value := strings.Split(scanner.Text(), ":")
+							fullResponse[value[0]] = strings.Join(value[1:len(value)], " ")
+
+						}
+						if len(validResponse) != 6 {
+							work.Connection.Write([]byte("Not a valid header \n"))
+							work.Connection.Close()
+						} else {
+							header := Header{Method: method, User_Agent: validResponse["User-Agent"], Content_Length: fullResponse["Content-Length"], Host: validResponse["Host"], Referer: validResponse["Referer"]}
+							fmt.Println(header, "\n")
+							fmt.Println(fullResponse)
 						}
 						if err := scanner.Err(); err != nil {
 							fmt.Println("Error reading headers:", err)
 						}
+						fmt.Println("")
 					}
 				}
 				// Send a response back to person contacting us.
