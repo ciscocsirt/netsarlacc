@@ -9,7 +9,6 @@ import (
 )
 
 //TODO:
-// -- TCP server that accpets only the above protocol with the following methods: Head, Put, Post, Get
 // -- Determine a payload struct for headers
 // -- ALL CAPS letters for headers up to 20 bytes up to space
 // -- URL encoding then space
@@ -21,8 +20,6 @@ import (
 // -- Test speed and race conditions
 // -- Test with real connections
 // -- Format for writing to files
-// -- check connection http if not drop
-// -- \r\n is the end of the header
 
 const (
 	CONN_HOST = "localhost"
@@ -42,7 +39,6 @@ func main() {
 	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
 		fmt.Println("Error listening: ", err.Error())
-		log.Fatal(err)
 		Logger(err)
 	}
 
@@ -56,7 +52,6 @@ func main() {
 		connection, err := listen.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
-			log.Fatal(err)
 			Logger(err)
 		}
 		go Collector(connection)

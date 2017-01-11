@@ -6,11 +6,7 @@ import (
 )
 
 func Logger(err error) {
-	// TODO:
-	// -- Rotational log
-	// -- write to file
-	// -- takes JSON
-	logwriter, e := syslog.New(syslog.LOG_NOTICE, "netsarlacc")
+	logwriter, e := syslog.New(syslog.LOG_CRIT, "netsarlacc")
 	if e == nil {
 		log.SetOutput(logwriter)
 	}

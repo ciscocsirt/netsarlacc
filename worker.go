@@ -6,6 +6,8 @@ import (
 	// "bytes"
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -40,18 +42,16 @@ type Header struct {
 	Referer        string `json:"http_referer"`
 }
 
-type Body struct {
-	Body string
+type EncodedConn struct {
+	Encode string `json:"raw_data"`
 }
 
 type ValidRequest struct {
 	Timestamp string `json:"timestamp"`
 	Header
-	// Source IP
-	// Dest IP
-	// dest_port
-	// src_port
-	Raw_Data Body `json:"raw_data"`
+	Source      net.Addr `json:"src_ip"`  // Source IP
+	Destination net.Addr `json:"dest_ip"` // Dest IP
+	EncodedConn
 }
 
 // This function "starts" the worker by starting a goroutine, that is
@@ -64,7 +64,6 @@ func (w *Worker) Start() {
 			select {
 			case work := <-w.Work:
 				// Receive a work request.
-				// Makes buffer no bigger than 2048 bytes
 				buf := make([]byte, 4000)
 				// Total request reads no more than 4kb set caps
 				// Sets a read dead line. If it doesn't receive any information
@@ -73,10 +72,8 @@ func (w *Worker) Start() {
 				//
 				//work.Connection.SetReadBuffer()
 				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+				// If accpets trickled data, use timer below
 				//timer := time.NewTimer(time.Millisecond * 500)
-				// Go utility for parsing headers
-				// Buffer to stream reader then loop over each line
-				//
 				bufSize, err := work.Connection.Read(buf)
 				if err != nil {
 					fmt.Println("Error reading:", err.Error())
@@ -97,8 +94,7 @@ func (w *Worker) Start() {
 					headerIndex := strings.LastIndex(s, "\r\n") - 2
 					headerFields := string(buf[:headerIndex])
 					method := strings.Fields(requestLines[0])[0]
-					bodyField := Body{Body: hex.EncodeToString(buf[headerIndex:bufSize])}
-					fmt.Println(bodyField)
+					allFields := EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 					validResponse := make(map[string]string)
 					fullResponse := make(map[string]string)
 					// Regex to compare headers
@@ -106,11 +102,10 @@ func (w *Worker) Start() {
 					scanner := bufio.NewScanner(strings.NewReader(headerFields))
 					for scanner.Scan() {
 						for scanner.Scan() {
+							value := strings.Split(scanner.Text(), ":")
 							if fieldsRegex.MatchString(scanner.Text()) {
-								value := strings.Split(scanner.Text(), ":")
 								validResponse[value[0]] = strings.Join(value[1:len(value)], " ")
 							}
-							value := strings.Split(scanner.Text(), ":")
 							fullResponse[value[0]] = strings.Join(value[1:len(value)], " ")
 
 						}
@@ -119,8 +114,13 @@ func (w *Worker) Start() {
 							work.Connection.Close()
 						} else {
 							header := Header{Method: method, User_Agent: validResponse["User-Agent"], Content_Length: fullResponse["Content-Length"], Host: validResponse["Host"], Referer: validResponse["Referer"]}
-							fmt.Println(header, "\n")
-							fmt.Println(fullResponse)
+							validHeaderLogging := ValidRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: work.Connection.LocalAddr(), Destination: work.Connection.RemoteAddr(), EncodedConn: allFields}
+							b, err := json.Marshal(validHeaderLogging)
+							if err != nil {
+								fmt.Println("Error marshalling header information to JSON", err)
+								Logger(err)
+							}
+							fmt.Println(string(b))
 						}
 						if err := scanner.Err(); err != nil {
 							fmt.Println("Error reading headers:", err)
