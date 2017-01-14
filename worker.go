@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	// "net"
+	"net"
 	// "bytes"
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
-	"net"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -36,21 +36,22 @@ type Worker struct {
 
 type Header struct {
 	Method         string `json:"http_method"`
-	User_Agent     string `json:"user_agent"`
+	User_Agent     string `json:"http_user_agent"`
 	Content_Length string `json:"bytes_client"`
 	Host           string `json:"url"`
 	Referer        string `json:"http_referer"`
+	Version        string `json:"http_version"`
 }
 
 type EncodedConn struct {
 	Encode string `json:"raw_data"`
 }
 
-type ValidRequest struct {
+type LoggedRequest struct {
 	Timestamp string `json:"timestamp"`
 	Header
-	Source      net.Addr `json:"src_ip"`  // Source IP
-	Destination net.Addr `json:"dest_ip"` // Dest IP
+	Source      net.Addr `json:"src_ip"`  // Source IP net.Addr
+	Destination string   `json:"dest_ip"` // Dest IP net.Addr
 	EncodedConn
 }
 
@@ -74,62 +75,30 @@ func (w *Worker) Start() {
 				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 				// If accpets trickled data, use timer below
 				//timer := time.NewTimer(time.Millisecond * 500)
+				sourceIP := work.Connection.RemoteAddr()
 				bufSize, err := work.Connection.Read(buf)
+				rawData := EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 				if err != nil {
+					// Log rawData if error
 					fmt.Println("Error reading:", err.Error())
 					Logger(err)
-					// Hex encode all error data
 					work.Connection.Write([]byte("Error I/O timeout. \n"))
 					work.Connection.Close()
-				}
-				s := string(buf[:])
-				requestLines := strings.Split(s, "\n")
-				headRegex, _ := regexp.Compile("HTT(P|PS)\\/*.*")
-				if !headRegex.MatchString(requestLines[0]) {
-					//  Remove below line after testing
-					work.Connection.Write([]byte("Non http \n"))
-					work.Connection.Close()
 				} else {
-					// fmt.Printf("%s\n", buf)
-					headerIndex := strings.LastIndex(s, "\r\n") - 2
-					headerFields := string(buf[:headerIndex])
-					method := strings.Fields(requestLines[0])[0]
-					allFields := EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
-					validResponse := make(map[string]string)
-					fullResponse := make(map[string]string)
-					// Regex to compare headers
-					fieldsRegex, _ := regexp.Compile("^(User-Agent:)|(Host)|(Referer:)|(Accept-Language:)|(Accept-Encoding:)|(Connection:)")
-					scanner := bufio.NewScanner(strings.NewReader(headerFields))
-					for scanner.Scan() {
-						for scanner.Scan() {
-							value := strings.Split(scanner.Text(), ":")
-							if fieldsRegex.MatchString(scanner.Text()) {
-								validResponse[value[0]] = strings.Join(value[1:len(value)], " ")
-							}
-							fullResponse[value[0]] = strings.Join(value[1:len(value)], " ")
-
-						}
-						if len(validResponse) != 6 {
-							work.Connection.Write([]byte("Not a valid header \n"))
-							work.Connection.Close()
-						} else {
-							header := Header{Method: method, User_Agent: validResponse["User-Agent"], Content_Length: fullResponse["Content-Length"], Host: validResponse["Host"], Referer: validResponse["Referer"]}
-							validHeaderLogging := ValidRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: work.Connection.LocalAddr(), Destination: work.Connection.RemoteAddr(), EncodedConn: allFields}
-							b, err := json.Marshal(validHeaderLogging)
-							if err != nil {
-								fmt.Println("Error marshalling header information to JSON", err)
-								Logger(err)
-							}
-							fmt.Println(string(b))
-						}
-						if err := scanner.Err(); err != nil {
-							fmt.Println("Error reading headers:", err)
-						}
-						fmt.Println("")
+					validConnLogging, err := parseConn(buf, bufSize, rawData, sourceIP)
+					if err != nil {
+						fmt.Println(err)
+						// Log rawData if error
+						work.Connection.Write([]byte("Error with header. \n"))
+						work.Connection.Close()
+					} else {
+						jsonHeader, _ := ToJSON(validConnLogging)
+						fmt.Println(jsonHeader)
 					}
 				}
+
 				// Send a response back to person contacting us.
-				work.Connection.Write([]byte("HTML response would go here. \n"))
+				work.Connection.Write([]byte(""))
 				work.Connection.Close()
 
 			case <-w.QuitChan:
@@ -147,4 +116,46 @@ func (w *Worker) Stop() {
 	go func() {
 		w.QuitChan <- true
 	}()
+}
+
+func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (LoggedRequest, error) {
+	s := string(buf[:])
+	methodRegex, _ := regexp.Compile("^(GET |POST |HEAD |PUT |DELETE |TRACE |OPTIONS |CONNECT |PATCH )")
+	protocolRegex, _ := regexp.Compile("HTTP\\/*.*")
+	fieldsRegex, _ := regexp.Compile("^[A-z].*:(.*)$")
+	requestLines := strings.Split(s, "\n")
+	protocol := strings.Fields(requestLines[0])[2]
+	var allHeaders map[string]string
+	if methodRegex.MatchString(requestLines[0]) && protocolRegex.MatchString(protocol) {
+		allHeaders = make(map[string]string)
+		headerFields := string(buf[:strings.LastIndex(s, "\r\n")-2])
+		scanner := bufio.NewScanner(strings.NewReader(headerFields))
+		for scanner.Scan() {
+			for scanner.Scan() {
+				value := strings.SplitN(scanner.Text(), ":", 2)
+				if !fieldsRegex.MatchString(scanner.Text()) {
+					return LoggedRequest{}, errors.New("One or more of the header fields are invalid ")
+				} else {
+					allHeaders[value[0]] = strings.Join(value[1:len(value)], " ")
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return LoggedRequest{}, err
+		}
+	} else {
+		return LoggedRequest{}, errors.New("Error parsing headers")
+	}
+	header := Header{Method: strings.Fields(requestLines[0])[0], User_Agent: allHeaders["User-Agent"], Content_Length: allHeaders["Content-Length"], Host: "http://" + strings.Trim(allHeaders["Host"], " ") + strings.Fields(requestLines[0])[1], Referer: allHeaders["Referer"], Version: protocol}
+	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: sourceIP, Destination: allHeaders["Host"], EncodedConn: raw}
+	return validConnLogging, nil
+}
+
+// ToJSON converts a struct to a JSON string
+func ToJSON(data interface{}) (string, error) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
