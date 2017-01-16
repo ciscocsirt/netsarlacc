@@ -79,21 +79,21 @@ func (w *Worker) Start() {
 				bufSize, err := work.Connection.Read(buf)
 				rawData := EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 				if err != nil {
-					// Log rawData if error
 					fmt.Println("Error reading:", err.Error())
-					Logger(err)
+					AppLogger(err)
 					work.Connection.Write([]byte("Error I/O timeout. \n"))
 					work.Connection.Close()
 				} else {
 					validConnLogging, err := parseConn(buf, bufSize, rawData, sourceIP)
 					if err != nil {
 						fmt.Println(err)
-						// Log rawData if error
-						work.Connection.Write([]byte("Error with header. \n"))
+						jsonLog, _ := ToJSON(rawData)
+						ConnLogger(jsonLog)
+						work.Connection.Write([]byte(""))
 						work.Connection.Close()
 					} else {
-						jsonHeader, _ := ToJSON(validConnLogging)
-						fmt.Println(jsonHeader)
+						jsonLog, _ := ToJSON(validConnLogging)
+						ConnLogger(jsonLog)
 					}
 				}
 
@@ -144,7 +144,7 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 			return LoggedRequest{}, err
 		}
 	} else {
-		return LoggedRequest{}, errors.New("Error parsing headers")
+		return LoggedRequest{}, errors.New("Error parsing headers or non http request")
 	}
 	header := Header{Method: strings.Fields(requestLines[0])[0], User_Agent: allHeaders["User-Agent"], Content_Length: allHeaders["Content-Length"], Host: "http://" + strings.Trim(allHeaders["Host"], " ") + strings.Fields(requestLines[0])[1], Referer: allHeaders["Referer"], Version: protocol}
 	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: sourceIP, Destination: allHeaders["Host"], EncodedConn: raw}

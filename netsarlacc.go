@@ -39,7 +39,7 @@ func main() {
 	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
 		fmt.Println("Error listening: ", err.Error())
-		Logger(err)
+		AppLogger(err)
 	}
 
 	//Close the listener when the app closes
@@ -52,7 +52,7 @@ func main() {
 		connection, err := listen.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
-			Logger(err)
+			AppLogger(err)
 		}
 		go Collector(connection)
 	}
