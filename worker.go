@@ -1,13 +1,14 @@
 package main
 
 import (
-	"fmt"
-	"net"
-	// "bytes"
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/ioutil"
+	"net"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -72,6 +73,7 @@ func (w *Worker) Start() {
 				// Whole transaction time no more than 500 mili
 				//
 				//work.Connection.SetReadBuffer()
+				//60000
 				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 				// If accpets trickled data, use timer below
 				//timer := time.NewTimer(time.Millisecond * 500)
@@ -89,17 +91,20 @@ func (w *Worker) Start() {
 						fmt.Println(err)
 						jsonLog, _ := ToJSON(rawData)
 						ConnLogger(jsonLog)
-						work.Connection.Write([]byte(""))
 						work.Connection.Close()
 					} else {
 						jsonLog, _ := ToJSON(validConnLogging)
 						ConnLogger(jsonLog)
+						absPath, _ := filepath.Abs("./netsarlacc/template/csirtResponse.html")
+						data, err := ioutil.ReadFile(absPath)
+						if err != nil {
+							fmt.Println("error is ", err)
+						}
+						work.Connection.Write([]byte("HTTP 200 OK\r\nContent-Length: 10441\r\n\r\n"))
+						work.Connection.Write(data)
+						work.Connection.Close()
 					}
 				}
-
-				// Send a response back to person contacting us.
-				work.Connection.Write([]byte(""))
-				work.Connection.Close()
 
 			case <-w.QuitChan:
 				// We have been asked to stop.
