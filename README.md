@@ -6,7 +6,6 @@ A robust enterprise-grade sinkhole for security monitoring and incident response
 
 ## Getting Started ##
 
-
 ## TODO ##
 - Finish README
 - Benchmarking

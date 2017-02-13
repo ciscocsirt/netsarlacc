@@ -2,15 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -38,7 +42,8 @@ type Worker struct {
 type Header struct {
 	Method         string `json:"http_method"`
 	User_Agent     string `json:"http_user_agent"`
-	Content_Length string `json:"bytes_client"`
+	Content_Length string `json:"http_content_length,omitempty"`
+	ByesClient     string `json:"bytes_client"`
 	Host           string `json:"url"`
 	Referer        string `json:"http_referer"`
 	Version        string `json:"http_version"`
@@ -95,13 +100,33 @@ func (w *Worker) Start() {
 					} else {
 						jsonLog, _ := ToJSON(validConnLogging)
 						ConnLogger(jsonLog)
-						absPath, _ := filepath.Abs("./netsarlacc/template/csirtResponse.html")
+						currentDir, err := os.Getwd()
+						absPath, _ := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
 						data, err := ioutil.ReadFile(absPath)
 						if err != nil {
 							fmt.Println("error is ", err)
 						}
-						work.Connection.Write([]byte("HTTP 200 OK\r\nContent-Length: 10441\r\n\r\n"))
-						work.Connection.Write(data)
+						funcMap := template.FuncMap{
+							"Date": func(s string) string {
+								tmp := strings.Fields(s)
+								return fmt.Sprintf("%s", tmp[0])
+
+							},
+							"Time": func(s string) string {
+								tmp := strings.Fields(s)
+								return fmt.Sprintf("%s", tmp[1])
+
+							},
+						}
+						var test bytes.Buffer
+						tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
+						if err != nil {
+							fmt.Println("error is ", err)
+						}
+						err = tmpl.Execute(&test, validConnLogging)
+						// server header, date header
+						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length:" + string(len(test.Bytes())) + "\r\n\r\n"))
+						work.Connection.Write((test.Bytes()))
 						work.Connection.Close()
 					}
 				}
@@ -123,11 +148,13 @@ func (w *Worker) Stop() {
 	}()
 }
 
+//If post and content lenght is greater than 0, remove non-ASCII and place into body field.
+//
 func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (LoggedRequest, error) {
 	s := string(buf[:])
 	methodRegex, _ := regexp.Compile("^(GET |POST |HEAD |PUT |DELETE |TRACE |OPTIONS |CONNECT |PATCH )")
-	protocolRegex, _ := regexp.Compile("HTTP\\/*.*")
-	fieldsRegex, _ := regexp.Compile("^[A-z].*:(.*)$")
+	protocolRegex, _ := regexp.Compile("^HTTP/[0-9].[0-9]")
+	fieldsRegex, _ := regexp.Compile("^[A-Za-z-]+: (.*)$")
 	requestLines := strings.Split(s, "\n")
 	protocol := strings.Fields(requestLines[0])[2]
 	var allHeaders map[string]string
@@ -137,11 +164,11 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 		scanner := bufio.NewScanner(strings.NewReader(headerFields))
 		for scanner.Scan() {
 			for scanner.Scan() {
-				value := strings.SplitN(scanner.Text(), ":", 2)
+				value := strings.SplitN(strings.ToLower(scanner.Text()), ":", 2)
 				if !fieldsRegex.MatchString(scanner.Text()) {
 					return LoggedRequest{}, errors.New("One or more of the header fields are invalid ")
 				} else {
-					allHeaders[value[0]] = strings.Join(value[1:len(value)], " ")
+					allHeaders[value[0]] = strings.Join(value[1:], " ")
 				}
 			}
 		}
@@ -151,8 +178,9 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 	} else {
 		return LoggedRequest{}, errors.New("Error parsing headers or non http request")
 	}
-	header := Header{Method: strings.Fields(requestLines[0])[0], User_Agent: allHeaders["User-Agent"], Content_Length: allHeaders["Content-Length"], Host: "http://" + strings.Trim(allHeaders["Host"], " ") + strings.Fields(requestLines[0])[1], Referer: allHeaders["Referer"], Version: protocol}
-	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: sourceIP, Destination: allHeaders["Host"], EncodedConn: raw}
+	// if header does not exist, do not include
+	header := Header{Method: strings.Fields(requestLines[0])[0], User_Agent: allHeaders["user-agent"], Content_Length: allHeaders["content-length"], ByesClient: strconv.Itoa(bufSize), Host: "http://" + strings.Trim(allHeaders["host"], " ") + strings.Fields(requestLines[0])[1], Referer: allHeaders["referer"], Version: protocol}
+	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: sourceIP, Destination: allHeaders["host"], EncodedConn: raw}
 	return validConnLogging, nil
 }
 
