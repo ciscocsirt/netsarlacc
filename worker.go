@@ -164,10 +164,11 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 		scanner := bufio.NewScanner(strings.NewReader(headerFields))
 		for scanner.Scan() {
 			for scanner.Scan() {
-				value := strings.SplitN(strings.ToLower(scanner.Text()), ":", 2)
+				value := strings.SplitN(scanner.Text(), ":", 2)
 				if !fieldsRegex.MatchString(scanner.Text()) {
 					return LoggedRequest{}, errors.New("One or more of the header fields are invalid ")
 				} else {
+					strings.ToLower(allHeaders[value[0]])
 					allHeaders[value[0]] = strings.Join(value[1:], " ")
 				}
 			}
