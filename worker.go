@@ -168,8 +168,8 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 				if !fieldsRegex.MatchString(scanner.Text()) {
 					return LoggedRequest{}, errors.New("One or more of the header fields are invalid ")
 				} else {
-					strings.ToLower(allHeaders[value[0]])
-					allHeaders[value[0]] = strings.Join(value[1:], " ")
+					// cannonicalize the header name via lowercase
+					allHeaders[strings.ToLower(value[0])] = strings.Join(value[1:], " ")
 				}
 			}
 		}
