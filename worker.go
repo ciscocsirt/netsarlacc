@@ -125,7 +125,7 @@ func (w *Worker) Start() {
 						}
 						err = tmpl.Execute(&test, validConnLogging)
 						// server header, date header
-						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length:" + string(len(test.Bytes())) + "\r\n\r\n"))
+						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: " + strconv.Itoa(len(test.Bytes())) + "\r\n\r\n"))
 						work.Connection.Write((test.Bytes()))
 						work.Connection.Close()
 					}
