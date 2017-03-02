@@ -40,13 +40,14 @@ type Worker struct {
 }
 
 type Header struct {
+	BytesClient    string `json:"bytes_client"`
 	Method         string `json:"http_method"`
-	User_Agent     string `json:"http_user_agent"`
-	Content_Length string `json:"http_content_length,omitempty"`
-	ByesClient     string `json:"bytes_client"`
-	Host           string `json:"url"`
-	Referer        string `json:"http_referer"`
+	Path           string `json:"url_path"`
 	Version        string `json:"http_version"`
+	User_Agent     string `json:"http_user_agent,omitempty"`
+	Content_Length string `json:"http_content_length,omitempty"`
+	Host           string `json:"dest_name,omitempty"`
+	Referer        string `json:"http_referer,omitempty"`
 }
 
 type EncodedConn struct {
@@ -151,37 +152,94 @@ func (w *Worker) Stop() {
 //If post and content lenght is greater than 0, remove non-ASCII and place into body field.
 //
 func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (LoggedRequest, error) {
-	s := string(buf[:])
-	methodRegex, _ := regexp.Compile("^(GET |POST |HEAD |PUT |DELETE |TRACE |OPTIONS |CONNECT |PATCH )")
-	protocolRegex, _ := regexp.Compile("^HTTP/[0-9].[0-9]")
-	fieldsRegex, _ := regexp.Compile("^[A-Za-z-]+: (.*)$")
-	requestLines := strings.Split(s, "\n")
-	protocol := strings.Fields(requestLines[0])[2]
-	var allHeaders map[string]string
-	if methodRegex.MatchString(requestLines[0]) && protocolRegex.MatchString(protocol) {
-		allHeaders = make(map[string]string)
-		headerFields := string(buf[:strings.LastIndex(s, "\r\n")-2])
-		scanner := bufio.NewScanner(strings.NewReader(headerFields))
-		for scanner.Scan() {
-			for scanner.Scan() {
-				value := strings.SplitN(scanner.Text(), ":", 2)
-				if !fieldsRegex.MatchString(scanner.Text()) {
-					return LoggedRequest{}, errors.New("One or more of the header fields are invalid ")
-				} else {
-					// cannonicalize the header name via lowercase
-					allHeaders[strings.ToLower(value[0])] = strings.Join(value[1:], " ")
-				}
+
+	// There are lots of methods but we really don't care which one is used
+	req_re := regexp.MustCompile(`^([A-Z]{3,10})\s(\S+)\s(HTTP\/1\.[01])$`)
+	// We'll allow any header name as long as it starts with a letter and any non-emtpy value
+	header_re := regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*):\s(.+)$`)
+
+	// This lets us use ReadLine() to get one line at a time
+	bufreader := bufio.NewReader(bytes.NewReader(buf[:bufSize]))
+
+	// The struct describing the request
+	var req_header Header
+
+	// The map for storing all the headers
+	allHeaders := make(map[string]string)
+
+	// read first line of HTTP request
+	bufline, lineprefix, err := bufreader.ReadLine()
+	if (err == nil) {
+		if (lineprefix == false) {
+			// The first line came through intact
+			// Apply validating regex
+			matches := req_re.FindStringSubmatch(string(bufline))
+			if (matches != nil) {
+				req_header.Method  = string(matches[1])
+				req_header.Path    = string(matches[2])
+				req_header.Version = string(matches[3])
+			} else {
+				return LoggedRequest{}, errors.New(`Request header failed regex validation`)
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			return LoggedRequest{}, err
+		} else {
+			return LoggedRequest{}, errors.New(`First request line was truncated`)
 		}
 	} else {
-		return LoggedRequest{}, errors.New("Error parsing headers or non http request")
+		return LoggedRequest{}, err
 	}
-	// if header does not exist, do not include
-	header := Header{Method: strings.Fields(requestLines[0])[0], User_Agent: allHeaders["user-agent"], Content_Length: allHeaders["content-length"], ByesClient: strconv.Itoa(bufSize), Host: "http://" + strings.Trim(allHeaders["host"], " ") + strings.Fields(requestLines[0])[1], Referer: allHeaders["referer"], Version: protocol}
-	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: header, Source: sourceIP, Destination: allHeaders["host"], EncodedConn: raw}
+
+	// Read any (optional) headers until first blank line indicating the end of the headers
+	for {
+		bufline, lineprefix, err := bufreader.ReadLine()
+
+		if (err != nil) {
+			return LoggedRequest{}, err
+		}
+
+		if (lineprefix == true) {
+			return LoggedRequest{}, errors.New(`Found truncated header`)
+		}
+
+		bufstr := string(bufline)
+		if (bufstr == "") {
+			// This is a blank line so it's last
+			break;
+		}
+
+		matches := header_re.FindStringSubmatch(bufstr)
+		if (matches != nil) {
+			// Canonical header name
+			header_can := strings.ToLower(matches[1])
+
+			if _, ok := allHeaders[header_can]; ok {
+				return LoggedRequest{}, errors.New(`Got duplicate header from client`)
+			}
+
+			allHeaders[header_can] = matches[2]
+		} else {
+			return LoggedRequest{}, errors.New(`Header failed regex validation`)
+		}
+
+	}
+
+	// Set the non-optional parts of this header
+	req_header.BytesClient = strconv.Itoa(bufSize)
+
+	// Now  set some of the headers we got into the header struct
+	if val, ok := allHeaders["user-agent"]; ok {
+		req_header.User_Agent = val
+	}
+	if val, ok := allHeaders["referer"]; ok {
+		req_header.Referer = val
+	}
+	if val, ok := allHeaders["content-length"]; ok {
+		req_header.Content_Length = val
+	}
+	if val, ok := allHeaders["host"]; ok {
+		req_header.Host = val
+	}
+
+	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, Source: sourceIP, Destination: allHeaders["host"], EncodedConn: raw}
 	return validConnLogging, nil
 }
 
