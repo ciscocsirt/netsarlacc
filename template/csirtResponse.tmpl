@@ -24,32 +24,34 @@
   <blockquote>
     <table style="border: 1px solid grey">
       <tr>
-	<td rowspan="1" colspan="1" />
 	<td rowspan="1" colspan="1">Date:</td>
 	<td rowspan="1" colspan="1">{{.Timestamp | Date}}</td>
       </tr>
       <tr>
-	<td rowspan="1" colspan="1" />
 	<td rowspan="1" colspan="1">Time:</td>
 	<td rowspan="1" colspan="1">{{.Timestamp | Time}}</td>
       </tr>
       <tr>
-	<td rowspan="1" colspan="1" />
 	<td rowspan="1" colspan="1">Client IP address:</td>
 	<td rowspan="1" colspan="1">{{.Source}}</td>
       </tr>
       <tr>
-	<td rowspan="1" colspan="1" />
 	<td rowspan="1" colspan="1">Request URL:</td>
 	<td rowspan="1" colspan="1">{{.Header.Host}}</td>
       </tr>
+      {{if .Header.User_Agent}}
       <tr>
-	<td rowspan="1" colspan="1" />
 	<td rowspan="1" colspan="1">User-Agent:</td>
 	<td rowspan="1" colspan="1">{{.Header.User_Agent}}</td>
       </tr>
+      {{end}}
+      {{if .Header.Referer}}
       <tr>
-	<td rowspan="1" colspan="1" />
+	<td rowspan="1" colspan="1">Referer:</td>
+	<td rowspan="1" colspan="1">{{.Header.Referer}}</td>
+      </tr>
+      {{end}}
+      <tr>
 	<td rowspan="1" colspan="1">Request Method:</td>
 	<td rowspan="1" colspan="1">{{.Header.Method}}</td>
       </tr>
