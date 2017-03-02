@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"text/template"
+	"html/template"
 	"time"
 )
 
