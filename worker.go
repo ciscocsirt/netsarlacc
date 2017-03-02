@@ -72,7 +72,7 @@ func (w *Worker) Start() {
 			select {
 			case work := <-w.Work:
 				// Receive a work request.
-				buf := make([]byte, 4000)
+				buf := make([]byte, 4096)
 				// Total request reads no more than 4kb set caps
 				// Sets a read dead line. If it doesn't receive any information
 				// Check to see if it'll accept trickled data
