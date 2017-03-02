@@ -156,7 +156,9 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 	// There are lots of methods but we really don't care which one is used
 	req_re := regexp.MustCompile(`^([A-Z]{3,10})\s(\S+)\s(HTTP\/1\.[01])$`)
 	// We'll allow any header name as long as it starts with a letter and any non-emtpy value
-	header_re := regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*):\s(.+)$`)
+	// RFC2616 section 4.2 is very specific about how to treat whitespace
+	// https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
+	header_re := regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*):\s*([!-~\s]+?)\s*$`)
 
 	// This lets us use ReadLine() to get one line at a time
 	bufreader := bufio.NewReader(bytes.NewReader(buf[:bufSize]))
