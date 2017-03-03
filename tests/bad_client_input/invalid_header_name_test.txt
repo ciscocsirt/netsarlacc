@@ -1,0 +1,3 @@
+GET /invalid_header_name_test HTTP/1.0
+this isn't a valid header: value
+

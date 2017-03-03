@@ -1,0 +1,5 @@
+GET /header_without_value_test HTTP/1.0
+Some-Value: test1
+No-Value:
+With-Value: test2
+

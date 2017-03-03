@@ -1,0 +1,3 @@
+GET /no_blank_line_test HTTP/1.0
+Host: test.com
+Last-Header: I'm the end

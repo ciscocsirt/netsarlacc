@@ -1,0 +1,2 @@
+GET /bogus_http_version_test HTTP/3.0
+

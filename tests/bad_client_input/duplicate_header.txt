@@ -1,0 +1,6 @@
+GET /duplicate_header_test HTTP/1.0
+Host: host1.com
+Pad: This header is padding
+Host: host2.com
+Pad2: This header is also padding
+

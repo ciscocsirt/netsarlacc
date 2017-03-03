@@ -1,0 +1,2 @@
+GET /header_without_newline_test HTTP/1.0
+Header-Without: Newline
