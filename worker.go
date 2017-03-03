@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"net"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"html/template"
 	"time"
 )
 
@@ -57,8 +57,9 @@ type EncodedConn struct {
 type LoggedRequest struct {
 	Timestamp string `json:"timestamp"`
 	Header
-	Source      net.Addr `json:"src_ip"`  // Source IP net.Addr
-	Destination string   `json:"dest_ip"` // Dest IP net.Addr
+	SourceIP    string `json:"src_ip"`
+	SourcePort  string `json:"src_port"`
+	Destination string `json:"dest_ip"`
 	EncodedConn
 }
 
@@ -83,7 +84,9 @@ func (w *Worker) Start() {
 				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 				// If accpets trickled data, use timer below
 				//timer := time.NewTimer(time.Millisecond * 500)
-				sourceIP := work.Connection.RemoteAddr()
+				sourceIP, sourcePort, _ := net.SplitHostPort(work.Connection.RemoteAddr().String())
+				fmt.Println(sourceIP)
+				fmt.Println(sourcePort)
 				bufSize, err := work.Connection.Read(buf)
 				rawData := EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 				if err != nil {
@@ -92,7 +95,7 @@ func (w *Worker) Start() {
 					work.Connection.Write([]byte("Error I/O timeout. \n"))
 					work.Connection.Close()
 				} else {
-					validConnLogging, err := parseConn(buf, bufSize, rawData, sourceIP)
+					validConnLogging, err := parseConn(buf, bufSize, rawData, sourceIP, sourcePort)
 					if err != nil {
 						fmt.Println(err)
 						jsonLog, _ := ToJSON(rawData)
@@ -151,7 +154,7 @@ func (w *Worker) Stop() {
 
 //If post and content lenght is greater than 0, remove non-ASCII and place into body field.
 //
-func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (LoggedRequest, error) {
+func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP, sourcePort string) (LoggedRequest, error) {
 
 	// There are lots of methods but we really don't care which one is used
 	req_re := regexp.MustCompile(`^([A-Z]{3,10})\s(\S+)\s(HTTP\/1\.[01])$`)
@@ -171,14 +174,14 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 
 	// read first line of HTTP request
 	bufline, lineprefix, err := bufreader.ReadLine()
-	if (err == nil) {
-		if (lineprefix == false) {
+	if err == nil {
+		if lineprefix == false {
 			// The first line came through intact
 			// Apply validating regex
 			matches := req_re.FindStringSubmatch(string(bufline))
-			if (matches != nil) {
-				req_header.Method  = string(matches[1])
-				req_header.Path    = string(matches[2])
+			if matches != nil {
+				req_header.Method = string(matches[1])
+				req_header.Path = string(matches[2])
 				req_header.Version = string(matches[3])
 			} else {
 				return LoggedRequest{}, errors.New(`Request header failed regex validation`)
@@ -193,35 +196,28 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 	// Read any (optional) headers until first blank line indicating the end of the headers
 	for {
 		bufline, lineprefix, err := bufreader.ReadLine()
-
-		if (err != nil) {
+		if err != nil {
 			return LoggedRequest{}, err
 		}
-
-		if (lineprefix == true) {
+		if lineprefix == true {
 			return LoggedRequest{}, errors.New(`Found truncated header`)
 		}
-
 		bufstr := string(bufline)
-		if (bufstr == "") {
+		if bufstr == "" {
 			// This is a blank line so it's last
-			break;
+			break
 		}
-
 		matches := header_re.FindStringSubmatch(bufstr)
-		if (matches != nil) {
+		if matches != nil {
 			// Canonical header name
 			header_can := strings.ToLower(matches[1])
-
 			if _, ok := allHeaders[header_can]; ok {
 				return LoggedRequest{}, errors.New(`Got duplicate header from client`)
 			}
-
 			allHeaders[header_can] = matches[2]
 		} else {
 			return LoggedRequest{}, errors.New(`Header failed regex validation`)
 		}
-
 	}
 
 	// Set the non-optional parts of this header
@@ -241,7 +237,7 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, sourceIP net.Addr) (Log
 		req_header.Host = val
 	}
 
-	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, Source: sourceIP, Destination: allHeaders["host"], EncodedConn: raw}
+	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, SourceIP: sourceIP, SourcePort: sourcePort, Destination: allHeaders["host"], EncodedConn: raw}
 	return validConnLogging, nil
 }
 
