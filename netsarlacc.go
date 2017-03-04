@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	// "log"
 	"net"
 	// "reflect"
@@ -23,14 +24,18 @@ import (
 
 const (
 	CONN_HOST = "localhost"
-	CONN_PORT = "3333"
+	CONN_PORT = "8888"
 	CONN_TYPE = "tcp"
 )
 
+var (
+	sinkHost, _ = os.Hostname()
+	NWorkers    = flag.Int("n", 4, "The number of workers to start")
+	//Consider using a default value and looking up the host and appending it to default value
+	SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
+)
+
 func main() {
-	var (
-		NWorkers = flag.Int("n", 4, "The number of workers to start")
-	)
 	// Parse the command-line flags.
 	flag.Parse()
 	//starts the dispatcher
