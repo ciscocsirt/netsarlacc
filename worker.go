@@ -181,23 +181,23 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, SinkholeInstance, sourc
 				req_header.Path = string(matches[2])
 				req_header.Version = string(matches[3])
 			} else {
-				return LoggedRequest{}, errors.New(`Request header failed regex validation`)
+				return LoggedRequest{EncodedConn: raw}, errors.New(`Request header failed regex validation`)
 			}
 		} else {
-			return LoggedRequest{}, errors.New(`First request line was truncated`)
+			return LoggedRequest{EncodedConn: raw}, errors.New(`First request line was truncated`)
 		}
 	} else {
-		return LoggedRequest{}, err
+		return LoggedRequest{EncodedConn: raw}, err
 	}
 
 	// Read any (optional) headers until first blank line indicating the end of the headers
 	for {
 		bufline, lineprefix, err := bufreader.ReadLine()
 		if err != nil {
-			return LoggedRequest{}, err
+			return LoggedRequest{EncodedConn: raw}, err
 		}
 		if lineprefix == true {
-			return LoggedRequest{}, errors.New(`Found truncated header`)
+			return LoggedRequest{EncodedConn: raw}, errors.New(`Found truncated header`)
 		}
 		bufstr := string(bufline)
 		if bufstr == "" {
@@ -213,7 +213,7 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, SinkholeInstance, sourc
 			}
 			allHeaders[header_can] = matches[2]
 		} else {
-			return LoggedRequest{}, errors.New(`Header failed regex validation`)
+			return LoggedRequest{EncodedConn: raw}, errors.New(`Header failed regex validation`)
 		}
 	}
 
