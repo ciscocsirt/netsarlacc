@@ -90,7 +90,6 @@ func (w *Worker) Start() {
 				if err != nil {
 					fmt.Println("Error reading:", err.Error())
 					AppLogger(err)
-					work.Connection.Write([]byte("Error I/O timeout. \n"))
 					work.Connection.Close()
 				} else {
 					validConnLogging, err := parseConn(buf, bufSize, rawData, *SinkholeInstance, sourceIP, sourcePort)
