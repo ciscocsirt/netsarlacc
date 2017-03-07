@@ -41,9 +41,9 @@ type Worker struct {
 
 type Header struct {
 	BytesClient    string `json:"bytes_client"`
-	Method         string `json:"http_method"`
-	Path           string `json:"url_path"`
-	Version        string `json:"http_version"`
+	Method         string `json:"http_method,omitempty"`
+	Path           string `json:"url_path,omitempty"`
+	Version        string `json:"http_version,omitempty"`
 	User_Agent     string `json:"http_user_agent,omitempty"`
 	Content_Length string `json:"http_content_length,omitempty"`
 	Host           string `json:"dest_name,omitempty"`
@@ -55,12 +55,14 @@ type EncodedConn struct {
 }
 
 type LoggedRequest struct {
-	Timestamp string `json:"timestamp"`
+	Timestamp string  `json:"timestamp"`
 	Header
 	SourceIP   string `json:"src_ip"`
 	SourcePort string `json:"src_port"`
 	Sinkhole   string `json:"sinkhole_instance"`
 	EncodedConn
+	ReqError   bool   `json:"request_error"`
+	ErrorMsg   string `json:"request_error_message,omitempty"`
 }
 
 // This function "starts" the worker by starting a goroutine, that is
@@ -76,30 +78,50 @@ func (w *Worker) Start() {
 				buf := make([]byte, 4096)
 				// Total request reads no more than 4kb set caps
 				// Sets a read dead line. If it doesn't receive any information
-				// Check to see if it'll accept trickled data
-				// Whole transaction time no more than 500 mili
-				//
-				//work.Connection.SetReadBuffer()
-				//60000
-				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-				// If accpets trickled data, use timer below
-				//timer := time.NewTimer(time.Millisecond * 500)
-				sourceIP, sourcePort, _ := net.SplitHostPort(work.Connection.RemoteAddr().String())
-				bufSize, err := work.Connection.Read(buf)
-				rawData := EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
+
+				// This is where we're going to store everything we log about this connection
+				var req_log LoggedRequest
+
+				//validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, SourceIP: sourceIP, SourcePort: sourcePort, Sinkhole: SinkholeInstance, EncodedConn: raw}
+				// return validConnLogging, nil
+				req_log.Timestamp = time.Now().UTC().String()
+				req_log.Sinkhole = *SinkholeInstance
+
+				var err error
+				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Connection.RemoteAddr().String())
 				if err != nil {
-					fmt.Println("Error reading:", err.Error())
+					fmt.Println("Error getting socket endpoint:", err.Error())
 					AppLogger(err)
 					work.Connection.Close()
+
+					break
+				}
+
+				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+				bufSize, err := work.Connection.Read(buf)
+
+				req_log.Header.BytesClient = strconv.Itoa(bufSize)
+
+				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
+
+				if err != nil {
+					fmt.Println("Error reading on socket:", err.Error())
+					AppLogger(err)
+					work.Connection.Close()
+
+					req_log.ReqError = true
+					req_log.ErrorMsg = err.Error()
+					jsonLog, _ := ToJSON(req_log)
+					ConnLogger(jsonLog)
 				} else {
-					validConnLogging, err := parseConn(buf, bufSize, rawData, *SinkholeInstance, sourceIP, sourcePort)
+					err := parseConn(buf, bufSize, &req_log)
 					if err != nil {
 						fmt.Println(err)
-						jsonLog, _ := ToJSON(rawData)
+						jsonLog, _ := ToJSON(req_log)
 						ConnLogger(jsonLog)
 						work.Connection.Close()
 					} else {
-						jsonLog, _ := ToJSON(validConnLogging)
+						jsonLog, _ := ToJSON(req_log)
 						ConnLogger(jsonLog)
 						currentDir, err := os.Getwd()
 						absPath, _ := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
@@ -124,7 +146,7 @@ func (w *Worker) Start() {
 						if err != nil {
 							fmt.Println("error is ", err)
 						}
-						err = tmpl.Execute(&test, validConnLogging)
+						err = tmpl.Execute(&test, req_log)
 						// server header, date header
 						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: " + strconv.Itoa(len(test.Bytes())) + "\r\n\r\n"))
 						work.Connection.Write((test.Bytes()))
@@ -149,9 +171,8 @@ func (w *Worker) Stop() {
 	}()
 }
 
-//If post and content lenght is greater than 0, remove non-ASCII and place into body field.
-//
-func parseConn(buf []byte, bufSize int, raw EncodedConn, SinkholeInstance, sourceIP, sourcePort string) (LoggedRequest, error) {
+
+func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) (error) {
 
 	// There are lots of methods but we really don't care which one is used
 	req_re := regexp.MustCompile(`^([A-Z]{3,10})\s(\S+)\s(HTTP\/1\.[01])$`)
@@ -162,9 +183,6 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, SinkholeInstance, sourc
 
 	// This lets us use ReadLine() to get one line at a time
 	bufreader := bufio.NewReader(bytes.NewReader(buf[:bufSize]))
-
-	// The struct describing the request
-	var req_header Header
 
 	// The map for storing all the headers
 	allHeaders := make(map[string]string)
@@ -177,27 +195,37 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, SinkholeInstance, sourc
 			// Apply validating regex
 			matches := req_re.FindStringSubmatch(string(bufline))
 			if matches != nil {
-				req_header.Method = string(matches[1])
-				req_header.Path = string(matches[2])
-				req_header.Version = string(matches[3])
+				req_log.Header.Method = string(matches[1])
+				req_log.Header.Path = string(matches[2])
+				req_log.Header.Version = string(matches[3])
 			} else {
-				return LoggedRequest{EncodedConn: raw}, errors.New(`Request header failed regex validation`)
+				req_log.ReqError = true
+				req_log.ErrorMsg = `Request header failed regex validation`
+				return errors.New(req_log.ErrorMsg)
 			}
 		} else {
-			return LoggedRequest{EncodedConn: raw}, errors.New(`First request line was truncated`)
+			req_log.ReqError = true
+			req_log.ErrorMsg = `First request line was truncated`
+			return errors.New(req_log.ErrorMsg)
 		}
 	} else {
-		return LoggedRequest{EncodedConn: raw}, err
+		req_log.ReqError = true
+		req_log.ErrorMsg = err.Error()
+		return err
 	}
 
 	// Read any (optional) headers until first blank line indicating the end of the headers
 	for {
 		bufline, lineprefix, err := bufreader.ReadLine()
 		if err != nil {
-			return LoggedRequest{EncodedConn: raw}, err
+			req_log.ReqError = true
+			req_log.ErrorMsg = err.Error()
+			return err
 		}
 		if lineprefix == true {
-			return LoggedRequest{EncodedConn: raw}, errors.New(`Found truncated header`)
+			req_log.ReqError = true
+			req_log.ErrorMsg = `Found truncated header`
+			return errors.New(req_log.ErrorMsg)
 		}
 		bufstr := string(bufline)
 		if bufstr == "" {
@@ -209,33 +237,34 @@ func parseConn(buf []byte, bufSize int, raw EncodedConn, SinkholeInstance, sourc
 			// Canonical header name
 			header_can := strings.ToLower(matches[1])
 			if _, ok := allHeaders[header_can]; ok {
-				return LoggedRequest{}, errors.New(`Got duplicate header from client`)
+				req_log.ReqError = true
+				req_log.ErrorMsg = `Got duplicate header from client`
+				return errors.New(req_log.ErrorMsg)
 			}
 			allHeaders[header_can] = matches[2]
 		} else {
-			return LoggedRequest{EncodedConn: raw}, errors.New(`Header failed regex validation`)
+			req_log.ReqError = true
+			req_log.ErrorMsg = `Header failed regex validation`
+			return errors.New(req_log.ErrorMsg)
 		}
 	}
 
-	// Set the non-optional parts of this header
-	req_header.BytesClient = strconv.Itoa(bufSize)
-
 	// Now  set some of the headers we got into the header struct
 	if val, ok := allHeaders["user-agent"]; ok {
-		req_header.User_Agent = val
+		req_log.Header.User_Agent = val
 	}
 	if val, ok := allHeaders["referer"]; ok {
-		req_header.Referer = val
+		req_log.Header.Referer = val
 	}
 	if val, ok := allHeaders["content-length"]; ok {
-		req_header.Content_Length = val
+		req_log.Header.Content_Length = val
 	}
 	if val, ok := allHeaders["host"]; ok {
-		req_header.Host = val
+		req_log.Header.Host = val
 	}
 
-	validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, SourceIP: sourceIP, SourcePort: sourcePort, Sinkhole: SinkholeInstance, EncodedConn: raw}
-	return validConnLogging, nil
+	req_log.ReqError = false
+	return nil
 }
 
 // ToJSON converts a struct to a JSON string
