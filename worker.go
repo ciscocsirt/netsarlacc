@@ -21,10 +21,9 @@ import (
 // NewWorker creates, and returns a new Worker object. Its only argument
 // is a channel that the worker can add itself to whenever it is done its
 // work.
-func NewWorker(id int, workerQueue chan chan WorkRequest) Worker {
+func NewWorker(workerQueue chan chan WorkRequest) Worker {
 	//Creating the worker
 	worker := Worker{
-		ID:          id,
 		Work:        make(chan WorkRequest),
 		WorkerQueue: workerQueue,
 		QuitChan:    make(chan bool)}
@@ -33,7 +32,6 @@ func NewWorker(id int, workerQueue chan chan WorkRequest) Worker {
 }
 
 type Worker struct {
-	ID          int
 	Work        chan WorkRequest
 	WorkerQueue chan chan WorkRequest
 	QuitChan    chan bool
@@ -55,14 +53,14 @@ type EncodedConn struct {
 }
 
 type LoggedRequest struct {
-	Timestamp string  `json:"timestamp"`
+	Timestamp string `json:"timestamp"`
 	Header
 	SourceIP   string `json:"src_ip"`
 	SourcePort string `json:"src_port"`
 	Sinkhole   string `json:"sinkhole_instance"`
 	EncodedConn
-	ReqError   bool   `json:"request_error"`
-	ErrorMsg   string `json:"request_error_message,omitempty"`
+	ReqError bool   `json:"request_error"`
+	ErrorMsg string `json:"request_error_message,omitempty"`
 }
 
 // This function "starts" the worker by starting a goroutine, that is
@@ -147,7 +145,6 @@ func (w *Worker) Start() {
 							fmt.Println("error is ", err)
 						}
 						err = tmpl.Execute(&test, req_log)
-						// server header, date header
 						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: " + strconv.Itoa(len(test.Bytes())) + "\r\n\r\n"))
 						work.Connection.Write((test.Bytes()))
 						work.Connection.Close()
@@ -156,7 +153,7 @@ func (w *Worker) Start() {
 
 			case <-w.QuitChan:
 				// We have been asked to stop.
-				fmt.Printf("worker%d stopping\n", w.ID)
+				fmt.Printf("worker stopped\n")
 				return
 			}
 		}
@@ -171,8 +168,7 @@ func (w *Worker) Stop() {
 	}()
 }
 
-
-func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) (error) {
+func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) error {
 
 	// There are lots of methods but we really don't care which one is used
 	req_re := regexp.MustCompile(`^([A-Z]{3,10})\s(\S+)\s(HTTP\/1\.[01])$`)

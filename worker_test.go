@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net"
 	"reflect"
 	"testing"
 )
@@ -81,28 +80,21 @@ func TestWorker_Stop(t *testing.T) {
 
 func Test_parseConn(t *testing.T) {
 	type args struct {
-		buf      []byte
-		bufSize  int
-		raw      EncodedConn
-		sourceIP net.Addr
+		buf     []byte
+		bufSize int
+		req_log *LoggedRequest
 	}
 	tests := []struct {
 		name    string
 		args    args
-		want    LoggedRequest
 		wantErr bool
 	}{
 	// TODO: Add test cases.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseConn(tt.args.buf, tt.args.bufSize, tt.args.raw, tt.args.sourceIP)
-			if (err != nil) != tt.wantErr {
+			if err := parseConn(tt.args.buf, tt.args.bufSize, tt.args.req_log); (err != nil) != tt.wantErr {
 				t.Errorf("parseConn() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseConn() = %v, want %v", got, tt.want)
 			}
 		})
 	}

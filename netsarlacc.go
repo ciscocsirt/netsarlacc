@@ -23,15 +23,15 @@ import (
 // -- Format for writing to files
 
 const (
+	// Set these to flags
 	CONN_HOST = "localhost"
 	CONN_PORT = "8888"
 	CONN_TYPE = "tcp"
 )
 
 var (
-	sinkHost, _ = os.Hostname()
-	NWorkers    = flag.Int("n", 4, "The number of workers to start")
-	//Consider using a default value and looking up the host and appending it to default value
+	sinkHost, _      = os.Hostname()
+	NWorkers         = flag.Int("n", 4, "The number of workers to start")
 	SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
 )
 
