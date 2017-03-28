@@ -41,7 +41,7 @@ func main() {
 	//starts the dispatcher
 	StartDispatcher(*NWorkers)
 	//starts the log channel
-	logChan := make(chan struct)
+	logChan := make(chan string)
 	//listen for incoming connections
 	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
