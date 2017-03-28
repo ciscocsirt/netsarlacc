@@ -7,6 +7,7 @@ import (
 	// "log"
 	"net"
 	// "reflect"
+	"crypto/tls"
 )
 
 //TODO:
@@ -35,11 +36,7 @@ var (
 	SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
 )
 
-func main() {
-	// Parse the command-line flags.
-	flag.Parse()
-	//starts the dispatcher
-	StartDispatcher(*NWorkers)
+func httpListen() {
 	//listen for incoming connections
 	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
@@ -61,6 +58,38 @@ func main() {
 		}
 		go Collector(connection)
 	}
+}
+
+func httpsListen() {
+	//TLS config
+	cer, err := tls.LoadX509KeyPair("server.crt", "server.key")
+	config := &tls.Config{Certificates: []tls.Certificate{cer}}
+	
+	//listen for incoming connections
+	ln, err := tls.Listen("tcp", ":443", config)
+	
+	//Close the listener when the app closes
+	defer ln.Close()
+	
+	fmt.Println("Listening on "+CONN_TYPE, CONN_HOST+":"+CONN_PORT)
+	//Loop will run forever or until the application closes
+	for {
+		//Listen for any incoming connections
+		connection, err := listen.Accept()
+		if err != nil {
+			fmt.Println("Error accepting: ", err.Error())
+			AppLogger(err)
+		}
+		go Collector(connection)
+	}
+
+func main() {
+	// Parse the command-line flags.
+	flag.Parse()
+	//starts the dispatcher
+	StartDispatcher(*NWorkers)
+	
+	httpListen()
+	go httpsListen
 
 }
-test
