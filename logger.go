@@ -4,6 +4,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 	"log"
 	"log/syslog"
+	"fmt"
 )
 
 func AppLogger(err error) {
@@ -21,3 +22,9 @@ func ConnLogger(v interface{}) {
 	})
 	log.Println(v)
 }
+
+func writeLogger(logChan chan string) {
+	s := <-logChan
+	fmt.Println(s)
+}
+	
