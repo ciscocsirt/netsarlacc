@@ -110,6 +110,7 @@ func (w *Worker) Start() {
 					req_log.ReqError = true
 					req_log.ErrorMsg = err.Error()
 					jsonLog, _ := ToJSON(req_log)
+					logChan <- jsonLog
 					ConnLogger(jsonLog)
 				} else {
 					err := parseConn(buf, bufSize, &req_log)
