@@ -7,6 +7,7 @@ import (
         "fmt"
         "os"
         "io"
+        "time"
 )
 
 func AppLogger(err error) {
@@ -25,27 +26,20 @@ func ConnLogger(v interface{}) {
         log.Println(v)
 }
 
-func RotateLogFile(file *os.File) {
-                
-}
-
 func writeLogger(Logchan chan string) {
         var logFile *os.File
-
-        //check to see if log file exsits already
-        if _, err := os.Stat("/path/to/whatever"); os.IsNotExist(err) {
-                // if file does not exist then create the file
-                logFile, err = os.OpenFile("test.log", os.O_CREATE|os.O_RDWR, 0666)
-                if err != nil {
-                        log.Fatal(err)
-                }
-        } else {
-                // if the file does exist truncate it
-                logFile, err = os.OpenFile("test.log", os.O_TRUNC|os.O_RDWR, 0666)
-                if err != nil {
-                        log.Fatal(err)
-                }
+        
+        //get current datetime and creates filename based on current time
+        now := time.Now()
+        filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
+        
+        //create file
+        logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
+        if err != nil {
+                log.Fatal(err)
         }
+        
+        defer logfile.Close()
 
         for l := range Logchan {
                 n, err := io.WriteString(logFile, l + "\n")
