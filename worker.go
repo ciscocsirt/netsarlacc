@@ -18,24 +18,24 @@ import (
 	"time"
 )
 
-// NewWorker creates, and returns a new Worker object. Its only argument
-// is a channel that the worker can add itself to whenever it is done its
-// work.
-func NewWorker(workerQueue chan chan WorkRequest) Worker {
-	//Creating the worker
-	worker := Worker{
-		Work:        make(chan WorkRequest),
-		WorkerQueue: workerQueue,
-		QuitChan:    make(chan bool)}
+// // NewWorker creates, and returns a new Worker object. Its only argument
+// // is a channel that the work.Connection.r can add itself to whenever it is done its
+// // work.Connection.
+// func NewWorker(work.Connection.rQueue chan chan WorkRequest) Worker {
+// 	//Creating the work.Connection.r
+// 	work.Connection.r := Worker{
+// 		Work:        make(chan WorkRequest),
+// 		WorkerQueue: work.Connection.rQueue,
+// 		QuitChan:    make(chan bool)}
 
-	return worker
-}
+// 	return work.Connection.r
+// }
 
-type Worker struct {
-	Work        chan WorkRequest
-	WorkerQueue chan chan WorkRequest
-	QuitChan    chan bool
-}
+// type Worker struct {
+// 	Work        chan WorkRequest
+// 	WorkerQueue chan chan WorkRequest
+// 	QuitChan    chan bool
+// }
 
 type Header struct {
 	BytesClient    string `json:"bytes_client"`
@@ -63,109 +63,85 @@ type LoggedRequest struct {
 	ErrorMsg string `json:"request_error_message,omitempty"`
 }
 
-// This function "starts" the worker by starting a goroutine, that is
+// This function "starts" the work.Connection.r by starting a goroutine, that is
 // an infinite "for-select" loop.
-func (w *Worker) Start() {
-	go func() {
-		for {
-			// Add ourselves into the worker queue.
-			w.WorkerQueue <- w.Work
-			select {
-			case work := <-w.Work:
-				// Receive a work request.
-				buf := make([]byte, 4096)
-				// Total request reads no more than 4kb set caps
-				// Sets a read dead line. If it doesn't receive any information
+func Worker(work WorkRequest) {
+	fmt.Println("working")
+	// Receive a work.Connection.request.
+	buf := make([]byte, 4096)
+	// Total request reads no more than 4kb set caps
+	// Sets a read dead line. If it doesn't receive any information
 
-				// This is where we're going to store everything we log about this connection
-				var req_log LoggedRequest
+	// This is where we're going to store everything we log about this connection
+	var req_log LoggedRequest
 
-				//validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, SourceIP: sourceIP, SourcePort: sourcePort, Sinkhole: SinkholeInstance, EncodedConn: raw}
-				// return validConnLogging, nil
-				req_log.Timestamp = time.Now().UTC().String()
-				req_log.Sinkhole = *SinkholeInstance
+	//validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, SourceIP: sourceIP, SourcePort: sourcePort, Sinkhole: SinkholeInstance, EncodedConn: raw}
+	// return validConnLogging, nil
+	req_log.Timestamp = time.Now().UTC().String()
+	req_log.Sinkhole = *SinkholeInstance
 
-				var err error
-				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Connection.RemoteAddr().String())
-				if err != nil {
-					fmt.Println("Error getting socket endpoint:", err.Error())
-					AppLogger(err)
-					work.Connection.Close()
+	var err error
+	req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Connection.RemoteAddr().String())
+	if err != nil {
+		fmt.Println("Error getting socket endpoint:", err.Error())
+		AppLogger(err)
+		work.Connection.Close()
+	}
 
-					break
-				}
+	work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	bufSize, err := work.Connection.Read(buf)
 
-				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-				bufSize, err := work.Connection.Read(buf)
+	req_log.Header.BytesClient = strconv.Itoa(bufSize)
+	req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 
-				req_log.Header.BytesClient = strconv.Itoa(bufSize)
+	if err != nil {
+		fmt.Println("Error reading on socket:", err.Error())
+		AppLogger(err)
+		work.Connection.Close()
 
-				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
-
-				if err != nil {
-					fmt.Println("Error reading on socket:", err.Error())
-					AppLogger(err)
-					work.Connection.Close()
-
-					req_log.ReqError = true
-					req_log.ErrorMsg = err.Error()
-					jsonLog, _ := ToJSON(req_log)
-					ConnLogger(jsonLog)
-				} else {
-					err := parseConn(buf, bufSize, &req_log)
-					if err != nil {
-						fmt.Println(err)
-						jsonLog, _ := ToJSON(req_log)
-						ConnLogger(jsonLog)
-						work.Connection.Close()
-					} else {
-						jsonLog, _ := ToJSON(req_log)
-						ConnLogger(jsonLog)
-						currentDir, err := os.Getwd()
-						absPath, _ := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
-						data, err := ioutil.ReadFile(absPath)
-						if err != nil {
-							fmt.Println("error is ", err)
-						}
-						funcMap := template.FuncMap{
-							"Date": func(s string) string {
-								tmp := strings.Fields(s)
-								return fmt.Sprintf("%s", tmp[0])
-
-							},
-							"Time": func(s string) string {
-								tmp := strings.Fields(s)
-								return fmt.Sprintf("%s", tmp[1])
-
-							},
-						}
-						var test bytes.Buffer
-						tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
-						if err != nil {
-							fmt.Println("error is ", err)
-						}
-						err = tmpl.Execute(&test, req_log)
-						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: " + strconv.Itoa(len(test.Bytes())) + "\r\n\r\n"))
-						work.Connection.Write((test.Bytes()))
-						work.Connection.Close()
-					}
-				}
-
-			case <-w.QuitChan:
-				// We have been asked to stop.
-				fmt.Printf("worker stopped\n")
-				return
+		req_log.ReqError = true
+		req_log.ErrorMsg = err.Error()
+		jsonLog, _ := ToJSON(req_log)
+		ConnLogger(jsonLog)
+	} else {
+		err := parseConn(buf, bufSize, &req_log)
+		if err != nil {
+			fmt.Println(err)
+			jsonLog, _ := ToJSON(req_log)
+			ConnLogger(jsonLog)
+			work.Connection.Close()
+		} else {
+			jsonLog, _ := ToJSON(req_log)
+			ConnLogger(jsonLog)
+			currentDir, err := os.Getwd()
+			absPath, _ := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
+			data, err := ioutil.ReadFile(absPath)
+			if err != nil {
+				fmt.Println("error is ", err)
 			}
-		}
-	}()
-}
+			funcMap := template.FuncMap{
+				"Date": func(s string) string {
+					tmp := strings.Fields(s)
+					return fmt.Sprintf("%s", tmp[0])
 
-// Stop tells the worker to stop listening for work requests.
-// Note that the worker will only stop *after* it has finished its work.
-func (w *Worker) Stop() {
-	go func() {
-		w.QuitChan <- true
-	}()
+				},
+				"Time": func(s string) string {
+					tmp := strings.Fields(s)
+					return fmt.Sprintf("%s", tmp[1])
+
+				},
+			}
+			var test bytes.Buffer
+			tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
+			if err != nil {
+				fmt.Println("error is ", err)
+			}
+			err = tmpl.Execute(&test, req_log)
+			work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: " + strconv.Itoa(len(test.Bytes())) + "\r\n\r\n"))
+			work.Connection.Write((test.Bytes()))
+			work.Connection.Close()
+		}
+	}
 }
 
 func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) error {

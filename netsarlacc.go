@@ -6,6 +6,7 @@ import (
 	"os"
 	// "log"
 	"net"
+	_ "net/http/pprof"
 	// "reflect"
 )
 
@@ -23,7 +24,7 @@ import (
 // -- Format for writing to files
 
 const (
-	// Set these to flags
+	// Set these to flags after init testing
 	CONN_HOST = "localhost"
 	CONN_PORT = "8888"
 	CONN_TYPE = "tcp"
@@ -31,15 +32,16 @@ const (
 
 var (
 	sinkHost, _      = os.Hostname()
-	NWorkers         = flag.Int("n", 4, "The number of workers to start")
+	NWorkers         = flag.Int("n", 100, "The number of workers to start")
 	SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
 )
 
 func main() {
 	// Parse the command-line flags.
 	flag.Parse()
-	//starts the dispatcher
-	StartDispatcher(*NWorkers)
+	//create the Pool of work
+	Pool := make(chan WorkRequest, *NWorkers)
+	fmt.Println(Pool)
 	//listen for incoming connections
 	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {

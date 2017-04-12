@@ -8,10 +8,11 @@ type WorkRequest struct {
 	Connection net.Conn
 }
 
-var WorkQueue = make(chan WorkRequest, 100)
+var Pool chan WorkRequest
 
-// Reveive incoming work request (connections) and add them to the work queue
+// Reveive incoming work request (connections) and add them to the work pool
 func Collector(conn net.Conn) {
 	work := WorkRequest{Connection: conn}
-	WorkQueue <- work
+	// Pool <- work
+	go Worker(work)
 }
