@@ -30,23 +30,25 @@ func writeLogger(Logchan chan string) {
         //variables
         var logFile *os.File
         var writeFile bool = true
-        
-        //get current datetime and creates filename based on current time
-        now := time.Now()
-        filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
-        
-        //create inital file
-        logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
-        if err != nil {
-                log.Fatal(err)
-        }
-        
+	var err error
+
         //ticker and file rotation goroutine
         ticker := time.NewTicker(time.Minute * 10)
         go func() {
-                for t := range ticker.C {
+        	//get current datetime and creates filename based on current time
+        	now := time.Now()
+        	filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
+
+        	//create inital file
+        	logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
+        	if err != nil {
+                	log.Fatal(err)
+       		}
+                for range ticker.C {
                         writeFile = false
-                        logfile.Close()
+                        logFile.Close()
+			//get current datetime and creates filename based on current time
+        		now := time.Now()
                         filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
                         logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
                         if err != nil {
@@ -54,13 +56,13 @@ func writeLogger(Logchan chan string) {
                         }
                         writeFile = true
                 }
-        }
-                        
-        
-        defer logfile.Close()
+        }()
+
+
+        defer logFile.Close()
 
         for l := range Logchan {
-                if writeFile = true{
+                if writeFile == true{
                         n, err := io.WriteString(logFile, l + "\n")
                         if err != nil {
                                 fmt.Println(n, err)
