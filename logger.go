@@ -18,14 +18,6 @@ func AppLogger(err error) {
         log.Print(err)
 }
 
-func ConnLogger(v interface{}) {
-        log.SetOutput(&lumberjack.Logger{
-                Filename: "netsarlacc.log",
-                MaxSize:  1, // megabytes
-        })
-        log.Println(v)
-}
-
 func writeLogger(Logchan chan string) {
         //variables
         var logFile *os.File
