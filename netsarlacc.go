@@ -1,12 +1,12 @@
 package main
 
 import (
-	"flag"
-	"fmt"
-	"os"
-	// "log"
-	"net"
-	// "reflect"
+        "flag"
+        "fmt"
+        "os"
+        // "log"
+        "net"
+        // "reflect"
 )
 
 //TODO:
@@ -23,31 +23,34 @@ import (
 // -- Format for writing to files
 
 const (
-	// Set these to flags
-	CONN_HOST = "localhost"
-	CONN_PORT = "8888"
-	CONN_TYPE = "tcp"
+        // Set these to flags
+        CONN_HOST = "0.0.0.0"
+        CONN_PORT = "8888"
+        CONN_TYPE = "tcp"
 )
 
 var (
-	sinkHost, _      = os.Hostname()
-	NWorkers         = flag.Int("n", 4, "The number of workers to start")
-	SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
+        sinkHost, _      = os.Hostname()
+        NWorkers         = flag.Int("n", 4, "The number of workers to start")
+        SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
+        Logchan = make(chan string, 1024)
 )
 
 func main() {
-	// Parse the command-line flags.
-	flag.Parse()
-	//starts the dispatcher
-	StartDispatcher(*NWorkers)
-	//listen for incoming connections
-	listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
-	if err != nil {
-		fmt.Println("Error listening: ", err.Error())
-		AppLogger(err)
-	}
+        // Parse the command-line flags.
+        flag.Parse()
+        //starts the dispatcher
+        StartDispatcher(*NWorkers)
+        //starts the log channel
+        go writeLogger(Logchan)
+        //listen for incoming connections
+        listen, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
+        if err != nil {
+                fmt.Println("Error listening: ", err.Error())
+                AppLogger(err)
+        }
 
-	//Close the listener when the app closes
+        //Close the listener when the app closes
 	defer listen.Close()
 
 	fmt.Println("Listening on "+CONN_TYPE, CONN_HOST+":"+CONN_PORT)
