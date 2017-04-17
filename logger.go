@@ -1,7 +1,6 @@
 package main
 
 import (
-        "gopkg.in/natefinch/lumberjack.v2"
         "log"
         "log/syslog"
         "fmt"
