@@ -110,17 +110,17 @@ func (w *Worker) Start() {
 					req_log.ReqError = true
 					req_log.ErrorMsg = err.Error()
 					jsonLog, _ := ToJSON(req_log)
-					ConnLogger(jsonLog)
+					logChan <- jsonLog
 				} else {
 					err := parseConn(buf, bufSize, &req_log)
 					if err != nil {
 						fmt.Println(err)
 						jsonLog, _ := ToJSON(req_log)
-						ConnLogger(jsonLog)
+						logChan <- jsonLog
 						work.Connection.Close()
 					} else {
 						jsonLog, _ := ToJSON(req_log)
-						ConnLogger(jsonLog)
+						logChan <- jsonLog
 						currentDir, err := os.Getwd()
 						absPath, _ := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
 						data, err := ioutil.ReadFile(absPath)
