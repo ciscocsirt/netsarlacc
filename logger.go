@@ -53,9 +53,6 @@ func writeLogger(Logchan chan string) {
                 }
         }()
 
-
-        defer logFile.Close()
-
         for l := range Logchan {
 		newfilemutex.Lock()
 		n, err := io.WriteString(logFile, l + "\n")
@@ -65,4 +62,9 @@ func writeLogger(Logchan chan string) {
 		newfilemutex.Unlock()
 	}
 
+	// Close out the current log file
+	logFile.Close()
+
+	// Notify the main routine that we've finished
+	Logstopchan <- true
 }

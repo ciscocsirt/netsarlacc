@@ -38,6 +38,8 @@ var (
         SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
         Logchan = make(chan string, 1024)
 	Stopchan = make(chan os.Signal, 1)
+	Workerstopchan = make(chan bool, *NWorkers)
+	Logstopchan = make(chan bool, 1)
 )
 
 func main() {
@@ -104,4 +106,35 @@ func main() {
 	// We must be stopping, close the listening socket
 	fmt.Fprintln(os.Stderr, "Shutting down listening socket")
 	listen.Close()
+
+	fmt.Fprintln(os.Stderr, "Stopping workers")
+	StopWorkers()
+
+	// As workers stop, they will tell us that.  We must wait for them
+	// so that we can close the logging after the pending work is done
+	for wstopped := 0; wstopped < *NWorkers; {
+		select {
+		case <-Workerstopchan:
+			wstopped++
+		case <-time.After(time.Second * 5):
+			fmt.Fprintln(os.Stderr, "Timed out waiting for all workers to stop!")
+			wstopped = *NWorkers // Maybe this should be a fatal error instead?
+		}
+	}
+
+	// Close the Logchan which will allow the remaining
+	// logs to get written to the logfile before the logging
+	// goroutine finally closes the file and tells us it finished
+	fmt.Fprintln(os.Stderr, "Flushing logs and closing the log file")
+	close(Logchan)
+
+	select {
+	case <-Logstopchan:
+		break
+	case <-time.After(time.Second * 5):
+		fmt.Fprintln(os.Stderr, "Timed out waiting for log flushing and closing!")
+		break
+	}
+
+	fmt.Fprintln(os.Stderr, "Shutdown complete")
 }

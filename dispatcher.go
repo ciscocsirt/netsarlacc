@@ -2,7 +2,11 @@ package main
 
 import "fmt"
 
-var WorkerQueue chan chan WorkRequest
+var (
+	WorkerQueue chan chan WorkRequest
+	WorkerSlice = make([]Worker, 0)
+)
+
 
 func StartDispatcher(nworkers int) {
 	// First, initialize the channel we are going to put the workers' work channels into.
@@ -13,6 +17,9 @@ func StartDispatcher(nworkers int) {
 		fmt.Println("Starting worker", i+1)
 		worker := NewWorker(WorkerQueue)
 		worker.Start()
+
+		// Store this worker so we can stop it later
+		WorkerSlice = append(WorkerSlice, worker)
 	}
 
 	go func() {
@@ -26,4 +33,12 @@ func StartDispatcher(nworkers int) {
 			}
 		}
 	}()
+}
+
+
+func StopWorkers() {
+
+	for _, w := range WorkerSlice {
+		w.Stop()
+	}
 }

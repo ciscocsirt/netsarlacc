@@ -153,7 +153,8 @@ func (w *Worker) Start() {
 
 			case <-w.QuitChan:
 				// We have been asked to stop.
-				fmt.Printf("worker stopped\n")
+				Workerstopchan <- true
+				// fmt.Fprintln(os.Stderr, "worker stopped")
 				return
 			}
 		}
@@ -163,9 +164,8 @@ func (w *Worker) Start() {
 // Stop tells the worker to stop listening for work requests.
 // Note that the worker will only stop *after* it has finished its work.
 func (w *Worker) Stop() {
-	go func() {
-		w.QuitChan <- true
-	}()
+	w.QuitChan <- true
+	// fmt.Fprintln(os.Stderr, "Worker got stop call")
 }
 
 func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) error {
