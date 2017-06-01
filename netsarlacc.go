@@ -10,6 +10,7 @@ import (
         // "log"
         "net"
         // "reflect"
+	"path/filepath"
 )
 
 //TODO:
@@ -35,10 +36,11 @@ const (
 var (
         sinkHost, _      = os.Hostname()
         NWorkers         = flag.Int("n", 4, "The number of workers to start")
-        SinkholeInstance = flag.String("i", "netsarlacc-"+sinkHost, "The sinkhole instance name")
+        SinkholeInstance = flag.String("i", "netsarlacc-" + sinkHost, "The sinkhole instance name")
+	Daemonize        = flag.Bool("D", false, "Daemonize the sinkhole")
         Logchan = make(chan string, 1024)
 	Stopchan = make(chan os.Signal, 1)
-	Workerstopchan = make(chan bool, *NWorkers)
+	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
 )
 
@@ -49,6 +51,22 @@ func main() {
 
         // Parse the command-line flags.
         flag.Parse()
+
+	// Check if we should daemonize
+	if *Daemonize == true {
+		pid, err := DaemonizeProc()
+
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Daemonization failed: ", err.Error())
+			AppLogger(err)
+		}
+
+		if pid != nil {
+			// This means we started a proc and we're not the daemon
+			os.Exit(0)
+		}
+	}
+
         //starts the dispatcher
         StartDispatcher(*NWorkers)
         //starts the log channel
@@ -137,4 +155,97 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "Shutdown complete")
+}
+
+
+func Fullpath(exe string) (string, error) {
+
+	// Bail out if the exe string is empty
+	if len(exe) == 0 {
+		return "", os.ErrInvalid
+	}
+
+	// Get an absolute path
+	fullpath, err := filepath.Abs(exe);
+
+	if err != nil {
+		return "", err
+	}
+
+	// Optionally we could also call EvalSymlinks to get the real path
+	// but I don't think that's needed here
+
+	return fullpath, nil
+}
+
+
+func DaemonizeProc() (*os.Process, error) {
+	_, daemonVarExists := os.LookupEnv("_NETSARLACC_DAEMON")
+
+	if daemonVarExists == true {
+		// We're the started daemon
+
+		// Unset the env var
+		err := os.Unsetenv("_NETSARLACC_DAEMON")
+
+		if err != nil {
+			return nil, err
+		}
+
+		// Break away from the parent
+		_, err = syscall.Setsid()
+
+		if err != nil {
+			return nil, err
+		}
+
+		// We may want to indicate that we need to setuid/gid here but
+		// we'll have to figure out how to Setuid after the socket are bound
+
+		// We may want to ensure we're at / by seting our cwd there too
+
+		// We may want to write our PID to a file
+
+		return nil, nil
+	} else {
+		// We need to start the daemon
+
+		fmt.Fprintln(os.Stderr, "Daemonizing...")
+
+		// Get our exename and full path
+		exe, err := Fullpath(os.Args[0])
+
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Unable to get full path of exe")
+			return nil, err
+		}
+
+		var attrs os.ProcAttr
+		// Eventually we may want to set the new proc's dir to /
+		// but this requires that we have support for a logging directory
+		// instead of just using the cwd for logs
+		// attrs.Dir = "/"
+
+		// Set the new process's stdin, stdout, and stderr to /dev/null
+		f_devnull, err := os.Open("/dev/null")
+
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Unable to open /dev/null")
+			return nil, err
+		}
+		attrs.Files = []*os.File{f_devnull, f_devnull, f_devnull}
+
+		// Tell the next process it's the deamon
+		os.Setenv("_NETSARLACC_DEAMON", "true")
+
+		// Try to start up the deamon process
+		pid, err := os.StartProcess(exe, os.Args, &attrs)
+
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Unable to start daemon process")
+			return nil, err
+		}
+
+		return pid, nil
+	}
 }
