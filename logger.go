@@ -8,6 +8,7 @@ import (
         "io"
         "time"
 	"sync"
+	"errors"
 )
 
 
@@ -36,7 +37,9 @@ func writeLogger(Logchan chan string) {
         //variables
         var logFile *os.File
 	var err error
-	var newfilemutex = &sync.Mutex{}
+	newfilemutex := &sync.Mutex{}
+	LogRotstopchan := make(chan bool, 1)
+	LogRotstopedchan := make(chan bool, 1)
 
         //ticker and file rotation goroutine
         ticker := time.NewTicker(time.Minute * 10)
@@ -54,19 +57,26 @@ func writeLogger(Logchan chan string) {
        		}
 		newfilemutex.Unlock()
 
-                for range ticker.C {
-			newfilemutex.Lock()
-                        logFile.Close()
-			//get current datetime and creates filename based on current time
-        		now := time.Now()
-                        filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
-                        logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
-                        if err != nil {
-                                AppLogger(err)
-				FatalAbort(false, -1)
-                        }
-			newfilemutex.Unlock()
-                }
+                for {
+			select {
+			case <-ticker.C:
+				newfilemutex.Lock()
+				logFile.Close()
+				//get current datetime and creates filename based on current time
+				now := time.Now()
+				filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
+				logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
+				if err != nil {
+					AppLogger(err)
+					FatalAbort(false, -1)
+				}
+				newfilemutex.Unlock()
+
+			case <-LogRotstopchan:
+				LogRotstopedchan <- true
+				return
+			}
+		}
         }()
 
         for l := range Logchan {
@@ -77,6 +87,18 @@ func writeLogger(Logchan chan string) {
 			FatalAbort(false, -1)
 		}
 		newfilemutex.Unlock()
+	}
+
+	// We need to stop the ticker and then abort the goroutine
+	ticker.Stop()
+	LogRotstopchan <- true
+
+	select {
+	case <-LogRotstopedchan:
+		break
+	case <-time.After(time.Second * 5):
+		AppLogger(errors.New("Timed out waiting for log rotation goroutine to stop!"))
+		break
 	}
 
 	// Close out the current log file
