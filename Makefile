@@ -21,7 +21,7 @@ gorun: $(GOFILES)
 	$(GO) run $(GOFILES)
 
 clean:
-	rm -f siknhole-*.log
+	rm -f sinkhole-*.log
 	rm -f netsarlacc
 	rm -f *.o
 	rm -f *~
