@@ -10,13 +10,27 @@ import (
 	"sync"
 )
 
+
 func AppLogger(err error) {
+
+	// Allow the passing of nil errors that we ignore
+	if err == nil {
+		return
+	}
+
+	// Send this error to stdout
+	fmt.Fprintln(os.Stderr, err.Error())
+
+	// Now send this error to syslog
         logwriter, e := syslog.New(syslog.LOG_CRIT, "netsarlacc")
         if e == nil {
                 log.SetOutput(logwriter)
-        }
-        log.Print(err)
+		log.Print(err)
+        } else {
+		fmt.Fprintln(os.Stderr, "Unable to send error to SYSLOG: " + e.Error())
+	}
 }
+
 
 func writeLogger(Logchan chan string) {
         //variables
@@ -34,10 +48,11 @@ func writeLogger(Logchan chan string) {
 
         	//create inital file
         	logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
-		newfilemutex.Unlock()
         	if err != nil {
-                	log.Fatal(err)
+                	AppLogger(err)
+			FatalAbort(false, -1)
        		}
+		newfilemutex.Unlock()
 
                 for range ticker.C {
 			newfilemutex.Lock()
@@ -47,7 +62,8 @@ func writeLogger(Logchan chan string) {
                         filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
                         logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
                         if err != nil {
-                                log.Fatal(err)
+                                AppLogger(err)
+				FatalAbort(false, -1)
                         }
 			newfilemutex.Unlock()
                 }
@@ -55,15 +71,21 @@ func writeLogger(Logchan chan string) {
 
         for l := range Logchan {
 		newfilemutex.Lock()
-		n, err := io.WriteString(logFile, l + "\n")
+		_, err := io.WriteString(logFile, l + "\n")
 		if err != nil {
-			fmt.Println(n, err)
+			AppLogger(err)
+			FatalAbort(false, -1)
 		}
 		newfilemutex.Unlock()
 	}
 
 	// Close out the current log file
-	logFile.Close()
+	err = logFile.Close()
+
+	if err != nil {
+		AppLogger(err)
+		FatalAbort(false, -1)
+	}
 
 	// Notify the main routine that we've finished
 	Logstopchan <- true

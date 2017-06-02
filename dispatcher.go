@@ -1,7 +1,5 @@
 package main
 
-import "fmt"
-
 var (
 	WorkerQueue chan chan WorkRequest
 	WorkerSlice = make([]Worker, 0)
@@ -14,7 +12,7 @@ func StartDispatcher(nworkers int) {
 
 	// Now, create all of our workers.
 	for i := 0; i < nworkers; i++ {
-		fmt.Println("Starting worker", i+1)
+		//fmt.Println("Starting worker", i+1)
 		worker := NewWorker(WorkerQueue)
 		worker.Start()
 
