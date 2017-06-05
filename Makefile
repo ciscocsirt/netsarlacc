@@ -10,15 +10,15 @@ GO=go
 # Graphite loop stuff
 CFLAGS=-Wall -Wextra -march=native -O2 -floop-interchange -fgraphite-identity -floop-block -floop-strip-mine
 
-GOFILES=collector.go dispatcher.go logger.go worker.go netsarlacc.go
+GOFILES=netsarlacc.go collector.go dispatcher.go logger.go worker.go
 
-main: gccgo
+main: gobuild
 
 gccgo: $(GOFILES)
 	$(CC) $(CFLAGS) -o netsarlacc $(GOFILES)
 
-gorun: $(GOFILES)
-	$(GO) run $(GOFILES)
+gobuild: $(GOFILES)
+	$(GO) build $(GOFILES)
 
 clean:
 	rm -f sinkhole-*.log
