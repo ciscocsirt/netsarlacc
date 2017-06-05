@@ -56,8 +56,8 @@ func main() {
 		pid, err := DaemonizeProc()
 
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Daemonization failed: ", err.Error())
-			AppLogger(err)
+			AppLogger(errors.New(fmt.Sprintf("Daemonization failed: %s", err.Error())))
+			FatalAbort(false, -1)
 		}
 
 		if pid != nil {
@@ -214,7 +214,7 @@ func DaemonizeProc() (*os.Process, error) {
 		}
 
 		// Break away from the parent
-		_, err = syscall.Setsid()
+		pid, err := syscall.Setsid()
 
 		if err != nil {
 			return nil, err
@@ -227,6 +227,8 @@ func DaemonizeProc() (*os.Process, error) {
 
 		// We may want to write our PID to a file
 
+		AppLogger(errors.New(fmt.Sprintf("Daemon got a PID of %d", pid)))
+
 		return nil, nil
 	} else {
 		// We need to start the daemon
@@ -237,7 +239,7 @@ func DaemonizeProc() (*os.Process, error) {
 		exe, err := Fullpath(os.Args[0])
 
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Unable to get full path of exe")
+			err = errors.New(fmt.Sprintf("Unable to get full path of exe: %s", err.Error()))
 			return nil, err
 		}
 
@@ -251,21 +253,23 @@ func DaemonizeProc() (*os.Process, error) {
 		f_devnull, err := os.Open("/dev/null")
 
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Unable to open /dev/null")
+			err = errors.New(fmt.Sprintf("Unable to open /dev/null: %s", err.Error()))
 			return nil, err
 		}
 		attrs.Files = []*os.File{f_devnull, f_devnull, f_devnull}
 
 		// Tell the next process it's the deamon
-		os.Setenv("_NETSARLACC_DEAMON", "true")
+		os.Setenv("_NETSARLACC_DAEMON", "true")
 
 		// Try to start up the deamon process
 		pid, err := os.StartProcess(exe, os.Args, &attrs)
 
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Unable to start daemon process")
+			err = errors.New(fmt.Sprintf("Unable to start daemon process: %s", err.Error()))
 			return nil, err
 		}
+
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("Daemon started as PID %d", pid.Pid))
 
 		return pid, nil
 	}
