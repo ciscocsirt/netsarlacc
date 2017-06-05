@@ -7,10 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-        // "log"
         "net"
-        // "reflect"
 	"path/filepath"
+	"errors"
 )
 
 //TODO:
@@ -75,18 +74,18 @@ func main() {
 	// Get the TCPAddr
 	listenAddr, err := net.ResolveTCPAddr(CONN_TYPE, CONN_HOST + ":" + CONN_PORT)
 	if err != nil {
-                fmt.Println("Unable to resolve listening port string: ", err.Error())
-                AppLogger(err)
+                AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address: %s", err.Error())))
+		FatalAbort(false, -1)
         }
 
         //listen for incoming connections
         listen, err := net.ListenTCP(CONN_TYPE, listenAddr)
         if err != nil {
-                fmt.Println("Error listening: ", err.Error())
-                AppLogger(err)
+                AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
+		FatalAbort(false, -1)
         }
 
-	fmt.Println("Listening on "+CONN_TYPE, CONN_HOST+":"+CONN_PORT)
+	AppLogger(errors.New("Listening on " + CONN_TYPE + " " + CONN_HOST + ":" + CONN_PORT))
 	// Loop until we get the stop signal
 	running := true
 	for (running == true) {
@@ -100,7 +99,7 @@ func main() {
 		select {
 		case <-Stopchan:
 			running = false
-			fmt.Fprintln(os.Stderr, "Got signal to stop...")
+			AppLogger(errors.New("Got signal to stop..."))
 			// We'll let the connection we just accepted / timed out on get handled still
 		default:
 			// The Stopchan would have blocked because it's empty
@@ -113,8 +112,7 @@ func main() {
 			if ((ok == true) && (netErr.Timeout() == true) && (netErr.Temporary() == true)) {
 				continue;
 			} else {
-				fmt.Println("Error accepting: ", err.Error())
-				AppLogger(err)
+				AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
 			}
 		} else {
 			go Collector(connection)
@@ -122,10 +120,21 @@ func main() {
 	} // End while running
 
 	// We must be stopping, close the listening socket
-	fmt.Fprintln(os.Stderr, "Shutting down listening socket")
+	AppLogger(errors.New("Shutting down listening socket"))
 	listen.Close()
 
-	fmt.Fprintln(os.Stderr, "Stopping workers")
+	// Shut the rest of everything down
+	AttemptShutdown()
+}
+
+
+func AttemptShutdown() {
+
+	// The goal here is to try to stop the workers
+	// and close out the log file so that data isn't lost
+	// and the log file is left consistent
+
+	AppLogger(errors.New("Stopping workers"))
 	StopWorkers()
 
 	// As workers stop, they will tell us that.  We must wait for them
@@ -135,26 +144,38 @@ func main() {
 		case <-Workerstopchan:
 			wstopped++
 		case <-time.After(time.Second * 5):
-			fmt.Fprintln(os.Stderr, "Timed out waiting for all workers to stop!")
-			wstopped = *NWorkers // Maybe this should be a fatal error instead?
+			AppLogger(errors.New("Timed out waiting for all workers to stop!"))
+			wstopped = *NWorkers
 		}
 	}
 
 	// Close the Logchan which will allow the remaining
 	// logs to get written to the logfile before the logging
 	// goroutine finally closes the file and tells us it finished
-	fmt.Fprintln(os.Stderr, "Flushing logs and closing the log file")
+	AppLogger(errors.New("Flushing logs and closing the log file"))
 	close(Logchan)
 
 	select {
 	case <-Logstopchan:
 		break
 	case <-time.After(time.Second * 5):
-		fmt.Fprintln(os.Stderr, "Timed out waiting for log flushing and closing!")
+		AppLogger(errors.New("Timed out waiting for log flushing and closing!"))
 		break
 	}
 
-	fmt.Fprintln(os.Stderr, "Shutdown complete")
+	AppLogger(errors.New("Shutdown complete"))
+}
+
+
+func FatalAbort(cleanup bool, ecode int) {
+
+	// If we're supposed to cleanup we'll attempt that first
+	if cleanup == true {
+		AttemptShutdown()
+	}
+
+	AppLogger(errors.New(fmt.Sprintf("Aborting with error code %d", ecode)))
+	os.Exit(ecode)
 }
 
 

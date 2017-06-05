@@ -86,10 +86,10 @@ func (w *Worker) Start() {
 				req_log.Sinkhole = *SinkholeInstance
 
 				var err error
+				var nerr error // For when we make a new error
 				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Connection.RemoteAddr().String())
 				if err != nil {
-					fmt.Println("Error getting socket endpoint:", err.Error())
-					AppLogger(err)
+					AppLogger(errors.New(fmt.Sprintf("Error getting socket endpoint: %s", err.Error())))
 					work.Connection.Close()
 
 					break
@@ -103,30 +103,80 @@ func (w *Worker) Start() {
 				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 
 				if err != nil {
-					fmt.Println("Error reading on socket:", err.Error())
-					AppLogger(err)
-					work.Connection.Close()
+					nerr = errors.New(fmt.Sprintf("Error reading on socket: %s", err.Error()))
+					AppLogger(nerr)
 
 					req_log.ReqError = true
-					req_log.ErrorMsg = err.Error()
-					jsonLog, _ := ToJSON(req_log)
-					Logchan <- jsonLog
+					req_log.ErrorMsg = nerr.Error()
+					jsonLog, err := ToJSON(req_log)
+					if err != nil {
+						AppLogger(err)
+
+						err = work.Connection.Close()
+						AppLogger(err)
+						break
+					} else {
+						Logchan <- jsonLog
+					}
+
+					err = work.Connection.Close()
+					AppLogger(err)
 				} else {
 					err := parseConn(buf, bufSize, &req_log)
 					if err != nil {
-						fmt.Println(err)
-						jsonLog, _ := ToJSON(req_log)
-						Logchan <- jsonLog
-						work.Connection.Close()
+						AppLogger(err)
+						jsonLog, err := ToJSON(req_log)
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						} else {
+							Logchan <- jsonLog
+						}
+
+						err = work.Connection.Close()
+						AppLogger(err)
 					} else {
-						jsonLog, _ := ToJSON(req_log)
-						Logchan <- jsonLog
+						jsonLog, err := ToJSON(req_log)
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						} else {
+							Logchan <- jsonLog
+						}
+
 						currentDir, err := os.Getwd()
-						absPath, _ := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						}
+
+						absPath, err := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						}
+
 						data, err := ioutil.ReadFile(absPath)
 						if err != nil {
-							fmt.Println("error is ", err)
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
 						}
+
 						funcMap := template.FuncMap{
 							"Date": func(s string) string {
 								tmp := strings.Fields(s)
@@ -139,15 +189,48 @@ func (w *Worker) Start() {
 
 							},
 						}
-						var test bytes.Buffer
 						tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
 						if err != nil {
-							fmt.Println("error is ", err)
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
 						}
-						err = tmpl.Execute(&test, req_log)
-						work.Connection.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: " + strconv.Itoa(len(test.Bytes())) + "\r\n\r\n"))
-						work.Connection.Write((test.Bytes()))
-						work.Connection.Close()
+
+						var tmplFilled bytes.Buffer
+						err = tmpl.Execute(&tmplFilled, req_log)
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						}
+
+						tmplBytes := tmplFilled.Bytes()
+						_, err = work.Connection.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: %d\r\n\r\n",  len(tmplBytes))))
+
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						}
+
+						_, err = work.Connection.Write(tmplBytes)
+
+						if err != nil {
+							AppLogger(err)
+
+							err = work.Connection.Close()
+							AppLogger(err)
+							break
+						}
+
+						err = work.Connection.Close()
+						AppLogger(err)
 					}
 				}
 
