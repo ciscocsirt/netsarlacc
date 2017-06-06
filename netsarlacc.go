@@ -10,6 +10,8 @@ import (
         "net"
 	"path/filepath"
 	"errors"
+	"crypto/tls"
+	"sync"
 )
 
 //TODO:
@@ -28,7 +30,7 @@ import (
 const (
         // Set these to flags
         CONN_HOST = "0.0.0.0"
-        CONN_PORT = "8888"
+        CONN_PORT = "8443"
         CONN_TYPE = "tcp"
 )
 
@@ -88,42 +90,79 @@ func main() {
         }
 
 	AppLogger(errors.New("Listening on " + CONN_TYPE + " " + CONN_HOST + ":" + CONN_PORT))
+
+	// Load the TLS cert and key
+	tlscer, err := tls.LoadX509KeyPair("server.pem", "server.key")
+
+        if err != nil {
+                AppLogger(errors.New(fmt.Sprintf("Unable to load TLS cert / key: %s", err.Error())))
+		FatalAbort(false, -1)
+        }
+
+	// Build the TLS listener configuration
+	tlsconfig := &tls.Config{
+		Certificates: []tls.Certificate{tlscer},
+		MinVersion: 0, // TLS 1.0
+		MaxVersion: 0, // TLS 1.2 or greater (latest version)
+	}
+
+	// Wrap listener with tls listener
+	tlslisten := tls.NewListener(listen, tlsconfig)
+
 	// Loop until we get the stop signal
-	running := true
-	for (running == true) {
-		// Set a listen timeout so we don't block indefinitely
-		listen.SetDeadline(time.Now().Add(time.Second))
+	stopacceptmutex := &sync.Mutex{}
+	stopaccept := false
+	go func() {
+		for {
+			// Listen for any incoming connections or possibly time out
+			connection, err := tlslisten.Accept()
 
-		// Listen for any incoming connections or possibly time out
-		connection, err := listen.Accept()
+			stopacceptmutex.Lock()
+			if stopaccept == true {
+				stopacceptmutex.Unlock()
 
-		// Check to see if we're supposed to stop
-		select {
-		case <-Stopchan:
-			running = false
-			AppLogger(errors.New("Got signal to stop..."))
-			// We'll let the connection we just accepted / timed out on get handled still
-		default:
-			// The Stopchan would have blocked because it's empty
-		}
+				// If we got a valid connection close it
+				if err == nil {
+					err = connection.Close()
 
-		if err != nil {
+					if err != nil {
+						AppLogger(errors.New(fmt.Sprintf("Error connection on shutdown: %s", err.Error())))
+					}
+				}
 
-			netErr, ok := err.(net.Error)
-			// If this was a timeout just keep going
-			if ((ok == true) && (netErr.Timeout() == true) && (netErr.Temporary() == true)) {
-				continue;
-			} else {
-				AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
+				return;
 			}
-		} else {
-			go Collector(connection)
-		}
-	} // End while running
+			stopacceptmutex.Unlock()
 
-	// We must be stopping, close the listening socket
-	AppLogger(errors.New("Shutting down listening socket"))
-	listen.Close()
+			if err != nil {
+				netErr, ok := err.(net.Error)
+				// If this was a timeout just keep going
+				if ((ok == true) && (netErr.Timeout() == true) && (netErr.Temporary() == true)) {
+					continue;
+				} else {
+					AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
+				}
+			} else {
+				go Collector(connection)
+			}
+		}
+	}()
+
+	// Block on select until we're ready to stop
+	select {
+	case <-Stopchan:
+		// We must be stopping
+		AppLogger(errors.New("Got signal to stop..."))
+
+		// We don't want to be calling accept on a closed socket
+		stopacceptmutex.Lock()
+		stopaccept = true
+		stopacceptmutex.Unlock()
+
+		// This will unblock any call to Accept() on this socket
+		AppLogger(errors.New("Shutting down listening socket"))
+		tlslisten.Close()
+	}
 
 	// Shut the rest of everything down
 	AttemptShutdown()
