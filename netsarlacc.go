@@ -220,8 +220,9 @@ func Fullpath(exe string) (string, error) {
 }
 
 
-func DaemonizeProc() (*os.Process, error) {
+func DaemonizeProc() (*int, error) {
 	pidlockchan := make(chan error, 1)
+	pipeerrchan := make(chan error, 1)
 
 	_, daemonVarExists := os.LookupEnv("_NETSARLACC_DAEMON")
 
@@ -300,6 +301,22 @@ func DaemonizeProc() (*os.Process, error) {
 			return nil, err
 		}
 
+		// Send a message over the pipe saying we made it.  NewFile fd numbers start from 0 not 1
+		pipef := os.NewFile(3, "pipe")
+		_, err = pipef.Write([]byte("0"))
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to write to daemon pipe: %s", err.Error()))
+			return nil, err
+		}
+
+		err = pipef.Close()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to close daemon side write pipe: %s", err.Error()))
+			return nil, err
+		}
+
 		return nil, nil
 	} else {
 		// We need to start the daemon
@@ -361,7 +378,7 @@ func DaemonizeProc() (*os.Process, error) {
 			return nil, err
 		}
 
-		var attrs os.ProcAttr
+		var attrs syscall.ProcAttr
 		// Eventually we may want to set the new proc's dir to /
 		// but this requires that we have support for a logging directory
 		// instead of just using the cwd for logs
@@ -374,21 +391,78 @@ func DaemonizeProc() (*os.Process, error) {
 			err = errors.New(fmt.Sprintf("Unable to open /dev/null: %s", err.Error()))
 			return nil, err
 		}
-		attrs.Files = []*os.File{f_devnull, f_devnull, f_devnull}
+
+		// Get a pipe between us and the daemon to make sure it starts properly
+		piper, pipew, err := os.Pipe()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to create pipe: %s", err.Error()))
+			return nil, err
+		}
+
+		//attrs.Files = []*os.File{f_devnull, f_devnull, f_devnull, pipew}
+		attrs.Files = []uintptr{f_devnull.Fd(), f_devnull.Fd(), f_devnull.Fd(), pipew.Fd()}
 
 		// Tell the next process it's the deamon
 		os.Setenv("_NETSARLACC_DAEMON", "true")
 
+		// Copy our environment to the proc attributes
+		attrs.Env = os.Environ()
+
 		// Try to start up the deamon process
-		pid, err := os.StartProcess(exe, os.Args, &attrs)
+		pid, _, err := syscall.StartProcess(exe, os.Args, &attrs)
 
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to start daemon process: %s", err.Error()))
 			return nil, err
 		}
 
-		fmt.Fprintln(os.Stderr, fmt.Sprintf("Daemon started as PID %d", pid.Pid))
+		// Listen on the pipe for the daemon to tell us that it made it
+		go func () {
+			pipebuf := make([]byte, 4096)
+			rlen, err := piper.Read(pipebuf)
 
-		return pid, nil
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to read from daemon pipe: %s", err.Error()))
+			} else {
+				rstring := string(pipebuf[:rlen])
+
+				if rstring != "0" {
+					err = errors.New(fmt.Sprintf("Did not read a status of 0 from the daemon pipe"))
+				}
+			}
+
+			pipeerrchan <- err
+		}()
+
+		var pipeerr error
+		select {
+		case pipeerr =  <- pipeerrchan:
+			if pipeerr != nil {
+				return nil, pipeerr
+			}
+			break
+		case <-time.After(time.Second * 5):
+			err = errors.New("Timed out waiting to read daemon pipe!")
+			return nil, err
+		}
+
+		err = piper.Close()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to close launch side read pipe: %s", err.Error()))
+			return nil, err
+		}
+
+		err = pipew.Close()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to close launch side write pipe: %s", err.Error()))
+			return nil, err
+		}
+
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("Daemon started as PID %d", pid))
+
+		return &pid, nil
 	}
 }
