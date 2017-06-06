@@ -170,15 +170,15 @@ func AttemptShutdown() {
 		err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
 
 		if err != nil {
-			err = errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error()))
-			FatalAbort(false, -1)
+			AppLogger(errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error())))
+			FatalAbort(false, -2)
 		}
 
 		AppLogger(errors.New("Closing out PID file"))
 		err = PidFile.Close()
 
 		if err != nil {
-			err = errors.New(fmt.Sprintf("Unable to close pid file: %s", err.Error()))
+			AppLogger(errors.New(fmt.Sprintf("Unable to close pid file: %s", err.Error())))
 			FatalAbort(false, -1)
 		}
 	}
@@ -252,7 +252,7 @@ func DaemonizeProc() (*os.Process, error) {
 		AppLogger(errors.New(fmt.Sprintf("Daemon got a PID of %d", pid)))
 
 		// Now open our PID file, get a lock, and write our PID to it
-		PidFile, err := os.OpenFile("netsarlacc.pid", os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile("netsarlacc.pid", os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
 
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
@@ -305,9 +305,10 @@ func DaemonizeProc() (*os.Process, error) {
 		// We need to start the daemon
 		AppLogger(errors.New(fmt.Sprintf("Daemonizing...")))
 
+		var err error
 		// First we'll try to open and acquire a lock on the pid file
 		// to ensure there isn't a daemon already running
-		PidFile, err := os.OpenFile("netsarlacc.pid", os.O_RDONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile("netsarlacc.pid", os.O_RDONLY|os.O_CREATE, 0644)
 
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
