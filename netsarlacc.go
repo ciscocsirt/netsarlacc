@@ -41,6 +41,8 @@ var (
 	Stopchan = make(chan os.Signal, 1)
 	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
+	Daemonized = false
+	PidFile *os.File
 )
 
 func main() {
@@ -163,6 +165,24 @@ func AttemptShutdown() {
 		break
 	}
 
+	if Daemonized == true {
+		AppLogger(errors.New("Releasing lock on PID file"))
+		err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error()))
+			FatalAbort(false, -1)
+		}
+
+		AppLogger(errors.New("Closing out PID file"))
+		err = PidFile.Close()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to close pid file: %s", err.Error()))
+			FatalAbort(false, -1)
+		}
+	}
+
 	AppLogger(errors.New("Shutdown complete"))
 }
 
@@ -201,10 +221,13 @@ func Fullpath(exe string) (string, error) {
 
 
 func DaemonizeProc() (*os.Process, error) {
+	pidlockchan := make(chan error, 1)
+
 	_, daemonVarExists := os.LookupEnv("_NETSARLACC_DAEMON")
 
 	if daemonVarExists == true {
 		// We're the started daemon
+		Daemonized = true
 
 		// Unset the env var
 		err := os.Unsetenv("_NETSARLACC_DAEMON")
@@ -225,15 +248,109 @@ func DaemonizeProc() (*os.Process, error) {
 
 		// We may want to ensure we're at / by seting our cwd there too
 
-		// We may want to write our PID to a file
-
+		// Report the PID that we got
 		AppLogger(errors.New(fmt.Sprintf("Daemon got a PID of %d", pid)))
+
+		// Now open our PID file, get a lock, and write our PID to it
+		PidFile, err := os.OpenFile("netsarlacc.pid", os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
+			return nil, err
+		}
+
+		// Now try to get an exclusive lock the file descriptor
+		go func() {
+			err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to acquire lock on pid file: %s", err.Error()))
+			}
+
+			pidlockchan <- err
+		}()
+
+		var lockerr error
+		select {
+		case lockerr =  <- pidlockchan:
+			if lockerr != nil {
+				return nil, lockerr
+			}
+			break
+		case <-time.After(time.Second * 5):
+			err = errors.New("Timed out waiting for pid lock acquisition!")
+			return nil, err
+		}
+
+		// Write our PID to the file
+		_, err = PidFile.Write([]byte(fmt.Sprintf("%d\n", pid)))
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to write pid into pid file: %s", err.Error()))
+			return nil, err
+		}
+
+		// Make sure the PID actually gets to the file because we aren't
+		// going to close the file until the daemon is about to exit
+		// so that we can keep holding onto our lock of the file
+		err = PidFile.Sync()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to sync written pid into pid file: %s", err.Error()))
+			return nil, err
+		}
 
 		return nil, nil
 	} else {
 		// We need to start the daemon
+		AppLogger(errors.New(fmt.Sprintf("Daemonizing...")))
 
-		fmt.Fprintln(os.Stderr, "Daemonizing...")
+		// First we'll try to open and acquire a lock on the pid file
+		// to ensure there isn't a daemon already running
+		PidFile, err := os.OpenFile("netsarlacc.pid", os.O_RDONLY|os.O_CREATE, 0644)
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
+			return nil, err
+		}
+
+		// Now try to get an exclusive lock the file descriptor
+		go func() {
+			err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to acquire lock on pid file: %s", err.Error()))
+			}
+
+			pidlockchan <- err
+		}()
+
+		var lockerr error
+		select {
+		case lockerr =  <- pidlockchan:
+			if lockerr != nil {
+				return nil, lockerr
+			}
+			break
+		case <-time.After(time.Second * 5):
+			err = errors.New("Timed out waiting for pid lock acquisition!")
+			return nil, err
+		}
+
+		// The lock worked so let's release it and then close the file
+		err = syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error()))
+			return nil, err
+		}
+
+		err = PidFile.Close()
+
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to close pid file: %s", err.Error()))
+			return nil, err
+		}
 
 		// Get our exename and full path
 		exe, err := Fullpath(os.Args[0])
