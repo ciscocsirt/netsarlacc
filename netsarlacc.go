@@ -171,7 +171,7 @@ func AttemptShutdown() {
 
 		if err != nil {
 			AppLogger(errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error())))
-			FatalAbort(false, -2)
+			FatalAbort(false, -1)
 		}
 
 		AppLogger(errors.New("Closing out PID file"))
