@@ -36,12 +36,12 @@
 	<td rowspan="1" colspan="1">{{.SourceIP}}</td>
       </tr>
       <tr>
-  <td rowspan="1" colspan="1">Client Port:</td>
-  <td rowspan="1" colspan="1">{{.SourcePort}}</td>
+	<td rowspan="1" colspan="1">Client Port:</td>
+	<td rowspan="1" colspan="1">{{.SourcePort}}</td>
       </tr>
       <tr>
 	<td rowspan="1" colspan="1">Request URL:</td>
-	<td rowspan="1" colspan="1">{{.Header.Host}}</td>
+	<td rowspan="1" colspan="1">{{.Header.Host}}{{.Header.Path}}</td>
       </tr>
       {{if .Header.User_Agent}}
       <tr>

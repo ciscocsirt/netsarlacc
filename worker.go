@@ -132,7 +132,13 @@ func (w *Worker) Start() {
 					err = work.Conn.Close()
 					AppLogger(err)
 				} else {
-					err := parseConn(buf, bufSize, &req_log)
+					var err error
+					if work.App == "http" {
+						err = parseConnHTTP(buf, bufSize, &req_log)
+					} else {
+						err = errors.New("Only http can be parsed at this time.")
+					}
+
 					if err != nil {
 						AppLogger(err)
 						jsonLog, err := ToJSON(req_log)
@@ -160,7 +166,8 @@ func (w *Worker) Start() {
 							Logchan <- jsonLog
 						}
 
-						currentDir, err := os.Getwd()
+						// Build the reponse using the template
+						tmplBytes, err := fillTemplateHTTP(&req_log)
 						if err != nil {
 							AppLogger(err)
 
@@ -169,57 +176,7 @@ func (w *Worker) Start() {
 							break
 						}
 
-						absPath, err := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
-						if err != nil {
-							AppLogger(err)
-
-							err = work.Conn.Close()
-							AppLogger(err)
-							break
-						}
-
-						data, err := ioutil.ReadFile(absPath)
-						if err != nil {
-							AppLogger(err)
-
-							err = work.Conn.Close()
-							AppLogger(err)
-							break
-						}
-
-						funcMap := template.FuncMap{
-							"Date": func(s string) string {
-								tmp := strings.Fields(s)
-								return fmt.Sprintf("%s", tmp[0])
-
-							},
-							"Time": func(s string) string {
-								tmp := strings.Fields(s)
-								return fmt.Sprintf("%s", tmp[1])
-
-							},
-						}
-						tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
-						if err != nil {
-							AppLogger(err)
-
-							err = work.Conn.Close()
-							AppLogger(err)
-							break
-						}
-
-						var tmplFilled bytes.Buffer
-						err = tmpl.Execute(&tmplFilled, req_log)
-						if err != nil {
-							AppLogger(err)
-
-							err = work.Conn.Close()
-							AppLogger(err)
-							break
-						}
-
-						tmplBytes := tmplFilled.Bytes()
-						_, err = work.Conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: %d\r\n\r\n",  len(tmplBytes))))
+						_, err = work.Conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",  len(tmplBytes))))
 
 						if err != nil {
 							AppLogger(err)
@@ -261,7 +218,7 @@ func (w *Worker) Stop() {
 	// fmt.Fprintln(os.Stderr, "Worker got stop call")
 }
 
-func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) error {
+func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 
 	// There are lots of methods but we really don't care which one is used
 	req_re := regexp.MustCompile(`^([A-Z]{3,10})\s(\S+)\s(HTTP\/1\.[01])$`)
@@ -354,6 +311,52 @@ func parseConn(buf []byte, bufSize int, req_log *LoggedRequest) error {
 
 	req_log.ReqError = false
 	return nil
+}
+
+
+func fillTemplateHTTP(req_log *LoggedRequest) ([]byte, error) {
+
+	// Get the location of the template
+
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Could not get current directory for template: %s", err.Error()))
+	}
+
+	absPath, err := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Could not get absolute path to template: %s", err.Error()))
+	}
+
+	data, err := ioutil.ReadFile(absPath)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Could not read template file: %s", err.Error()))
+	}
+
+	funcMap := template.FuncMap{
+		"Date": func(s string) string {
+			tmp := strings.Fields(s)
+			return fmt.Sprintf("%s", tmp[0])
+
+		},
+		"Time": func(s string) string {
+			tmp := strings.Fields(s)
+			return fmt.Sprintf("%s", tmp[1])
+
+		},
+	}
+	tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Could not instantiate new template: %s", err.Error()))
+	}
+
+	var tmplFilled bytes.Buffer
+	err = tmpl.Execute(&tmplFilled, req_log)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Could not execute template fill: %s", err.Error()))
+	}
+
+	return tmplFilled.Bytes(), nil
 }
 
 // ToJSON converts a struct to a JSON string
