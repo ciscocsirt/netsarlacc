@@ -1,0 +1,10 @@
+{
+    "Daemonize"       : false,
+    "Workers"         : 16,
+    "WorkingDirectory": "/home/brenrigh/projects/github/netsarlacc",
+    "LogDirectory"    : ".",
+    "ListenList"      : [{"Host":"0.0.0.0", "Port":"8080", "Proto":"tcp", "App":"http", "TLS":false},
+			 {"Host":"0.0.0.0", "Port":"8443", "Proto":"tcp", "App":"http", "TLS":true},
+			 {"Host":"0.0.0.0", "Port":"8444", "Proto":"tcp", "App":"http", "TLS":true, "TLSCert":"server.pem", "TLSKey":"server.key"}
+			]
+}

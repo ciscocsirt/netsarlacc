@@ -12,6 +12,7 @@ import (
 	"errors"
 	"crypto/tls"
 	"sync"
+	"encoding/json"
 )
 
 //TODO:
@@ -33,6 +34,8 @@ type ListenInfo struct {
 	Proto       string
 	App         string
 	TLS         bool
+	TLSCert     string
+	TLSKey      string
 	Socket      net.Listener
 }
 
@@ -67,12 +70,14 @@ var (
 var (
 	// Flags are pointers to a string
 	FlpathWorkingDir = flag.String("working-dir", ".", "The base directory for searching relative paths")
+	FlpathConfig     = flag.String("c", "", "Configuration file")
 	FlpathTLSCert    = flag.String("tls-cert", "server.pem", "Path to the TLS certificate")
 	FlpathTLSKey     = flag.String("tls-key", "server.key", "Path to the TLS certificate key")
 	FlpathLogDir     = flag.String("log-dir", "/var/log", "Path to the directory to store logs")
 	FlpathHTTPTemp   = flag.String("http-template", "template/csirtResponse.tmpl", "Path to the HTTP response template")
 	FlpathPIDFile    = flag.String("pid-file", "netsarlacc.pid", "Path to the daemonization pid file")
 	// These get filled out by resolving paths from flags
+	pathConfigFile = "" // Allowed to be blank
 	pathWorkingDir string
 	pathTLSCert    string
 	pathTLSKey     string
@@ -80,6 +85,21 @@ var (
 	pathHTTPTemp   string
 	pathPIDFile    string
 )
+
+
+type Config struct {
+	Daemonize        bool
+	Workers          int
+	LogName          string
+	WorkingDirectory string
+	LogDirectory     string
+	HTTPTemplate     string
+	PIDFile          string
+	TLSCert          string
+	TLSKey           string
+	ListenList       []ListenInfo
+}
+
 
 func main() {
 
@@ -91,6 +111,14 @@ func main() {
 
 	// Fill out paths
 	err := ResolvePaths()
+
+	if err != nil {
+		AppLogger(err)
+		FatalAbort(false, -1)
+	}
+
+	// Load the configuration file (if it isn't blank)
+	err = LoadConfig(pathConfigFile)
 
 	if err != nil {
 		AppLogger(err)
@@ -116,21 +144,6 @@ func main() {
         StartDispatcher(*NWorkers)
         //starts the log channel
         go writeLogger(Logchan)
-
-	// Load the TLS cert and key
-	tlscer, err := tls.LoadX509KeyPair(pathTLSCert, pathTLSKey)
-
-	if err != nil {
-		AppLogger(errors.New(fmt.Sprintf("Unable to load TLS cert / key: %s", err.Error())))
-		FatalAbort(false, -1)
-	}
-
-	// Build the TLS listener configuration
-	tlsconfig := &tls.Config{
-		Certificates: []tls.Certificate{tlscer},
-		MinVersion: 0, // TLS 1.0
-		MaxVersion: 0, // TLS 1.2 or greater (latest version)
-	}
 
 	// Iterate over the sockets we want to listen on
 	stopacceptmutex := &sync.RWMutex{}
@@ -158,10 +171,44 @@ func main() {
 
 		AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
 
-
 		if (*Li).TLS == true {
+			// Make sure listener-specific cert, key are both set or unset
+			if (((*Li).TLSCert == "") != ((*Li).TLSKey == "")) {
+				AppLogger(errors.New("Can not specify one of {TLSCert, TLSKey} but not the other for listener!"))
+				FatalAbort(false, -1)
+			}
+
+			var tlscer tls.Certificate
+			// If listener-specific cert, keys aren't specified load the global ones
+			if (*Li).TLSCert == "" {
+				// Default key paths
+				tlscer, err = tls.LoadX509KeyPair(pathTLSCert, pathTLSKey)
+
+				if err != nil {
+					AppLogger(errors.New(fmt.Sprintf("Unable to load global TLS cert / key: %s", err.Error())))
+					FatalAbort(false, -1)
+				}
+			} else {
+				// Listener specific key paths
+				tlscer, err = tls.LoadX509KeyPair((*Li).TLSCert, (*Li).TLSKey)
+
+				if err != nil {
+					AppLogger(errors.New(fmt.Sprintf("Unable to load listener-specific TLS cert / key: %s", err.Error())))
+					FatalAbort(false, -1)
+				}
+			}
+
+			// Build the TLS listener configuration
+			tlsconfig := &tls.Config{
+				Certificates: []tls.Certificate{tlscer},
+				MinVersion: 0, // TLS 1.0
+				MaxVersion: 0, // TLS 1.2 or greater (latest version)
+			}
+
 			// Wrap listener with tls listener
 			(*Li).Socket = tls.NewListener((*Li).Socket, tlsconfig)
+
+			AppLogger(errors.New(fmt.Sprintf("Wrapped %s %s/%s with TLS", (*Li).Host, (*Li).Proto, (*Li).Port)))
 		}
 
 		// Track the fact that we're about to start a goroutine
@@ -377,9 +424,77 @@ func ResolvePaths() error {
 		return errors.New(fmt.Sprintf("Unable to resolve pid-file path: %s", err.Error()))
 	}
 
+	// The config file is allowed to be blank
+	if *FlpathConfig != "" {
+		pathConfigFile, err = Fullpath(*FlpathConfig)
+		if err != nil {
+			return errors.New(fmt.Sprintf("Unable to resolve config file path: %s", err.Error()))
+		}
+	} else {
+		pathConfigFile = ""
+	}
+
 	return nil;
 }
 
+
+func LoadConfig(filename string) error {
+
+	// If the config file name is blank skip
+	if filename == "" {
+		return nil
+	}
+
+	conf := Config{}
+
+	confFh, err := os.Open(filename)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to open config file: %s", err.Error()))
+	}
+
+	jsonDecoder := json.NewDecoder(confFh)
+	err = jsonDecoder.Decode(&conf)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to parse config file: %s", err.Error()))
+	}
+
+	// Now copy any non-blank / non-nil values to our flag vars
+	Daemonize        = &(conf.Daemonize)
+	NWorkers         = &(conf.Workers)
+	if conf.LogName != "" {
+		FlpathLogDir     = &(conf.LogName)
+	}
+	if conf.WorkingDirectory != "" {
+		FlpathWorkingDir = &(conf.WorkingDirectory)
+	}
+	if conf.LogDirectory != "" {
+		FlpathLogDir     = &(conf.LogDirectory)
+	}
+	if conf.HTTPTemplate != "" {
+		FlpathHTTPTemp   = &(conf.HTTPTemplate)
+	}
+	if conf.PIDFile != "" {
+		FlpathPIDFile    = &(conf.PIDFile)
+	}
+	if conf.TLSCert != "" {
+		FlpathTLSCert    = &(conf.TLSCert)
+	}
+	if conf.TLSKey != "" {
+		FlpathTLSKey     = &(conf.TLSKey)
+	}
+	if len(conf.ListenList) > 0 {
+		ListenList = conf.ListenList
+	}
+
+	// Now resolve the paths using the new parameters
+	err = ResolvePaths()
+
+	if err != nil {
+		return errors.New(fmt.Sprintf("[config file] %s", err.Error()))
+	}
+
+	return nil
+}
 
 func DaemonizeProc() (*int, error) {
 	pidlockchan := make(chan error, 1)
