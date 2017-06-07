@@ -9,6 +9,7 @@ import (
         "time"
 	"sync"
 	"errors"
+	"path/filepath"
 )
 
 
@@ -33,6 +34,12 @@ func AppLogger(err error) {
 }
 
 
+func getFileName() string {
+	now := time.Now()
+	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", LogBaseName, now.Format("2006-01-02-15-04-05")))
+}
+
+
 func writeLogger(Logchan chan string) {
         //variables
         var logFile *os.File
@@ -46,11 +53,10 @@ func writeLogger(Logchan chan string) {
         go func() {
         	//get current datetime and creates filename based on current time
 		newfilemutex.Lock()
-        	now := time.Now()
-        	filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
+        	filename := getFileName()
 
         	//create inital file
-        	logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
+        	logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
         	if err != nil {
                 	AppLogger(err)
 			FatalAbort(false, -1)
@@ -63,9 +69,8 @@ func writeLogger(Logchan chan string) {
 				newfilemutex.Lock()
 				logFile.Close()
 				//get current datetime and creates filename based on current time
-				now := time.Now()
-				filename := ("sinkhole-" + now.Format("2006-01-02-15-04-05") + ".log")
-				logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0666)
+				filename := getFileName()
+				logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
 				if err != nil {
 					AppLogger(err)
 					FatalAbort(false, -1)

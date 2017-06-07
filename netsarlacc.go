@@ -54,12 +54,31 @@ var (
         NWorkers         = flag.Int("n", 4, "The number of workers to start")
         SinkholeInstance = flag.String("i", "netsarlacc-" + sinkHost, "The sinkhole instance name")
 	Daemonize        = flag.Bool("D", false, "Daemonize the sinkhole")
+	LogBaseName      = "sinkhole" // Logs will start with this name
         Logchan = make(chan string, 1024)
 	Stopchan = make(chan os.Signal, 1)
 	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
 	Daemonized = false
 	PidFile *os.File
+)
+
+// Path variables
+var (
+	// Flags are pointers to a string
+	FlpathWorkingDir = flag.String("working-dir", ".", "The base directory for searching relative paths")
+	FlpathTLSCert    = flag.String("tls-cert", "server.pem", "Path to the TLS certificate")
+	FlpathTLSKey     = flag.String("tls-key", "server.key", "Path to the TLS certificate key")
+	FlpathLogDir     = flag.String("log-dir", "/var/log", "Path to the directory to store logs")
+	FlpathHTTPTemp   = flag.String("http-template", "template/csirtResponse.tmpl", "Path to the HTTP response template")
+	FlpathPIDFile    = flag.String("pid-file", "netsarlacc.pid", "Path to the daemonization pid file")
+	// These get filled out by resolving paths from flags
+	pathWorkingDir string
+	pathTLSCert    string
+	pathTLSKey     string
+	pathLogDir     string
+	pathHTTPTemp   string
+	pathPIDFile    string
 )
 
 func main() {
@@ -69,6 +88,14 @@ func main() {
 
         // Parse the command-line flags.
         flag.Parse()
+
+	// Fill out paths
+	err := ResolvePaths()
+
+	if err != nil {
+		AppLogger(err)
+		FatalAbort(false, -1)
+	}
 
 	// Check if we should daemonize
 	if *Daemonize == true {
@@ -91,7 +118,7 @@ func main() {
         go writeLogger(Logchan)
 
 	// Load the TLS cert and key
-	tlscer, err := tls.LoadX509KeyPair("server.pem", "server.key")
+	tlscer, err := tls.LoadX509KeyPair(pathTLSCert, pathTLSKey)
 
 	if err != nil {
 		AppLogger(errors.New(fmt.Sprintf("Unable to load TLS cert / key: %s", err.Error())))
@@ -290,15 +317,20 @@ func FatalAbort(cleanup bool, ecode int) {
 }
 
 
-func Fullpath(exe string) (string, error) {
+func Fullpath(filename string) (string, error) {
 
-	// Bail out if the exe string is empty
-	if len(exe) == 0 {
+	// Bail out if the filename string is empty
+	if len(filename) == 0 {
 		return "", os.ErrInvalid
 	}
 
-	// Get an absolute path
-	fullpath, err := filepath.Abs(exe);
+	// If this is already an absolute path return it
+	if filepath.IsAbs(filename) == true {
+		return filename, nil
+	}
+
+	// Get an absolute path by joining with our working dir
+	fullpath, err := filepath.Abs(filepath.Join(pathWorkingDir, filename))
 
 	if err != nil {
 		return "", err
@@ -308,6 +340,44 @@ func Fullpath(exe string) (string, error) {
 	// but I don't think that's needed here
 
 	return fullpath, nil
+}
+
+
+func ResolvePaths() error {
+
+	// Resolve the working dir first since it gets used by others
+	var err error
+	pathWorkingDir, err = filepath.Abs(*FlpathWorkingDir)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve working-dir path: %s", err.Error()))
+	}
+
+	pathTLSCert, err = Fullpath(*FlpathTLSCert)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve tls-cert path: %s", err.Error()))
+	}
+
+	pathTLSKey, err = Fullpath(*FlpathTLSKey)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve tls-key path: %s", err.Error()))
+	}
+
+	pathLogDir, err = Fullpath(*FlpathLogDir)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve log-dir path: %s", err.Error()))
+	}
+
+	pathHTTPTemp, err = Fullpath(*FlpathHTTPTemp)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve http-template path: %s", err.Error()))
+	}
+
+	pathPIDFile, err = Fullpath(*FlpathPIDFile)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve pid-file path: %s", err.Error()))
+	}
+
+	return nil;
 }
 
 
@@ -338,13 +408,11 @@ func DaemonizeProc() (*int, error) {
 		// We may want to indicate that we need to setuid/gid here but
 		// we'll have to figure out how to Setuid after the socket are bound
 
-		// We may want to ensure we're at / by seting our cwd there too
-
 		// Report the PID that we got
 		AppLogger(errors.New(fmt.Sprintf("Daemon got a PID of %d", pid)))
 
 		// Now open our PID file, get a lock, and write our PID to it
-		PidFile, err = os.OpenFile("netsarlacc.pid", os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile(pathPIDFile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
 
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
@@ -416,7 +484,7 @@ func DaemonizeProc() (*int, error) {
 		var err error
 		// First we'll try to open and acquire a lock on the pid file
 		// to ensure there isn't a daemon already running
-		PidFile, err = os.OpenFile("netsarlacc.pid", os.O_RDONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile(pathPIDFile, os.O_RDONLY|os.O_CREATE, 0644)
 
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
@@ -470,10 +538,9 @@ func DaemonizeProc() (*int, error) {
 		}
 
 		var attrs syscall.ProcAttr
-		// Eventually we may want to set the new proc's dir to /
-		// but this requires that we have support for a logging directory
-		// instead of just using the cwd for logs
-		// attrs.Dir = "/"
+
+		// Start new process with cwd of /
+		attrs.Dir = "/"
 
 		// Set the new process's stdin, stdout, and stderr to /dev/null
 		f_devnull, err := os.Open("/dev/null")
@@ -491,7 +558,6 @@ func DaemonizeProc() (*int, error) {
 			return nil, err
 		}
 
-		//attrs.Files = []*os.File{f_devnull, f_devnull, f_devnull, pipew}
 		attrs.Files = []uintptr{f_devnull.Fd(), f_devnull.Fd(), f_devnull.Fd(), pipew.Fd()}
 
 		// Tell the next process it's the deamon

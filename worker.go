@@ -10,13 +10,16 @@ import (
 	"html/template"
 	"io/ioutil"
 	"net"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var (
+	HTTPtmpl *template.Template = nil // Allow caching of the HTTP template
+)
+
 
 // NewWorker creates, and returns a new Worker object. Its only argument
 // is a channel that the worker can add itself to whenever it is done its
@@ -316,42 +319,35 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 
 func fillTemplateHTTP(req_log *LoggedRequest) ([]byte, error) {
 
-	// Get the location of the template
+	// If we haven't cached the template yet, do so
+	if HTTPtmpl == nil {
+		templateData, err := ioutil.ReadFile(pathHTTPTemp)
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Could not read template file: %s", err.Error()))
+		}
 
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Could not get current directory for template: %s", err.Error()))
-	}
+		funcMap := template.FuncMap{
+			"Date": func(s string) string {
+				tmp := strings.Fields(s)
+				return fmt.Sprintf("%s", tmp[0])
 
-	absPath, err := filepath.Abs(currentDir + "/template/csirtResponse.tmpl")
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Could not get absolute path to template: %s", err.Error()))
-	}
+			},
+			"Time": func(s string) string {
+				tmp := strings.Fields(s)
+				return fmt.Sprintf("%s", tmp[1])
 
-	data, err := ioutil.ReadFile(absPath)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Could not read template file: %s", err.Error()))
-	}
+			},
+		}
 
-	funcMap := template.FuncMap{
-		"Date": func(s string) string {
-			tmp := strings.Fields(s)
-			return fmt.Sprintf("%s", tmp[0])
-
-		},
-		"Time": func(s string) string {
-			tmp := strings.Fields(s)
-			return fmt.Sprintf("%s", tmp[1])
-
-		},
-	}
-	tmpl, err := template.New("response").Funcs(funcMap).Parse(string(data[:]))
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Could not instantiate new template: %s", err.Error()))
+		// This will cache the template into the HTTPtmpl var
+		HTTPtmpl, err = template.New("HTTPresponse").Funcs(funcMap).Parse(string(templateData[:]))
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Could not instantiate new template: %s", err.Error()))
+		}
 	}
 
 	var tmplFilled bytes.Buffer
-	err = tmpl.Execute(&tmplFilled, req_log)
+	err := HTTPtmpl.Execute(&tmplFilled, req_log)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Could not execute template fill: %s", err.Error()))
 	}
