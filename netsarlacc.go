@@ -27,14 +27,19 @@ import (
 // -- Test with real connections
 // -- Format for writing to files
 
-const (
-        // Set these to flags
-        CONN_HOST = "0.0.0.0"
-        CONN_PORT = "8443"
-        CONN_TYPE = "tcp"
-)
+type ListenInfo struct {
+	Host        string
+	Port        string
+	Proto       string
+	TLS         bool
+	Socket      net.Listener
+}
 
 var (
+	ListenList = []ListenInfo{
+		ListenInfo{Host: "0.0.0.0", Port: "8000", Proto: "tcp", TLS: false},
+		ListenInfo{Host: "0.0.0.0", Port: "8443", Proto: "tcp", TLS: true},
+	}
         sinkHost, _      = os.Hostname()
         NWorkers         = flag.Int("n", 4, "The number of workers to start")
         SinkholeInstance = flag.String("i", "netsarlacc-" + sinkHost, "The sinkhole instance name")
@@ -75,29 +80,13 @@ func main() {
         //starts the log channel
         go writeLogger(Logchan)
 
-	// Get the TCPAddr
-	listenAddr, err := net.ResolveTCPAddr(CONN_TYPE, CONN_HOST + ":" + CONN_PORT)
-	if err != nil {
-                AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address: %s", err.Error())))
-		FatalAbort(false, -1)
-        }
-
-        //listen for incoming connections
-        listen, err := net.ListenTCP(CONN_TYPE, listenAddr)
-        if err != nil {
-                AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
-		FatalAbort(false, -1)
-        }
-
-	AppLogger(errors.New("Listening on " + CONN_TYPE + " " + CONN_HOST + ":" + CONN_PORT))
-
 	// Load the TLS cert and key
 	tlscer, err := tls.LoadX509KeyPair("server.pem", "server.key")
 
-        if err != nil {
-                AppLogger(errors.New(fmt.Sprintf("Unable to load TLS cert / key: %s", err.Error())))
+	if err != nil {
+		AppLogger(errors.New(fmt.Sprintf("Unable to load TLS cert / key: %s", err.Error())))
 		FatalAbort(false, -1)
-        }
+	}
 
 	// Build the TLS listener configuration
 	tlsconfig := &tls.Config{
@@ -106,47 +95,80 @@ func main() {
 		MaxVersion: 0, // TLS 1.2 or greater (latest version)
 	}
 
-	// Wrap listener with tls listener
-	tlslisten := tls.NewListener(listen, tlsconfig)
-
-	// Loop until we get the stop signal
-	stopacceptmutex := &sync.Mutex{}
+	// Iterate over the sockets we want to listen on
+	stopacceptmutex := &sync.RWMutex{}
 	stopaccept := false
-	go func() {
-		for {
-			// Listen for any incoming connections or possibly time out
-			connection, err := tlslisten.Accept()
+	var Liwg sync.WaitGroup
+	for i, _ := range ListenList {
+		// Get a pointer to the listen info
+		Li := &(ListenList[i])
 
-			stopacceptmutex.Lock()
-			if stopaccept == true {
-				stopacceptmutex.Unlock()
+		// Get the TCPAddr
+		listenAddrstring := fmt.Sprintf("%s:%s", (*Li).Host, (*Li).Port)
 
-				// If we got a valid connection close it
-				if err == nil {
-					err = connection.Close()
-
-					if err != nil {
-						AppLogger(errors.New(fmt.Sprintf("Error connection on shutdown: %s", err.Error())))
-					}
-				}
-
-				return;
-			}
-			stopacceptmutex.Unlock()
-
-			if err != nil {
-				netErr, ok := err.(net.Error)
-				// If this was a timeout just keep going
-				if ((ok == true) && (netErr.Timeout() == true) && (netErr.Temporary() == true)) {
-					continue;
-				} else {
-					AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
-				}
-			} else {
-				go Collector(connection)
-			}
+		listenAddr, err := net.ResolveTCPAddr((*Li).Proto, listenAddrstring)
+		if err != nil {
+			AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address for %s: %s", listenAddrstring, err.Error())))
+			FatalAbort(false, -1)
 		}
-	}()
+
+		//listen for incoming connections
+		(*Li).Socket, err = net.ListenTCP((*Li).Proto, listenAddr)
+		if err != nil {
+			AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
+			FatalAbort(false, -1)
+		}
+
+		AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
+
+
+		if (*Li).TLS == true {
+			// Wrap listener with tls listener
+			(*Li).Socket = tls.NewListener((*Li).Socket, tlsconfig)
+		}
+
+		// Track the fact that we're about to start a goroutine
+		Liwg.Add(1)
+		go func() {
+			// Now when this routine exits track it
+			defer Liwg.Done()
+
+			// Loop until we get the stop signal
+			for {
+				// Listen for any incoming connections or possibly time out
+				connection, err := (*Li).Socket.Accept()
+
+				stopacceptmutex.RLock()
+				if stopaccept == true {
+					stopacceptmutex.RUnlock()
+
+					// If we got a valid connection close it
+					if err == nil {
+						err = connection.Close()
+
+						if err != nil {
+							AppLogger(errors.New(fmt.Sprintf("Error connection on shutdown: %s", err.Error())))
+						}
+					}
+
+					return;
+				}
+				stopacceptmutex.RUnlock()
+
+				if err != nil {
+					netErr, ok := err.(net.Error)
+					// If this was a timeout just keep going
+					if ((ok == true) && (netErr.Timeout() == true) && (netErr.Temporary() == true)) {
+						continue;
+					} else {
+						AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
+					}
+				} else {
+					go Collector(connection)
+				}
+			}
+		}()
+	} // End ListenList range loop
 
 	// Block on select until we're ready to stop
 	select {
@@ -160,9 +182,22 @@ func main() {
 		stopacceptmutex.Unlock()
 
 		// This will unblock any call to Accept() on this socket
-		AppLogger(errors.New("Shutting down listening socket"))
-		tlslisten.Close()
+		AppLogger(errors.New("Shutting down listening sockets"))
+		for i, _ := range ListenList {
+			Li := &(ListenList[i])
+
+			err := (*Li).Socket.Close()
+
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Unable to close socket for %s %s/%s: %s",
+					(*Li).Host, (*Li).Proto, (*Li).Port, err.Error())))
+				FatalAbort(false, -1)
+			}
+		}
 	}
+
+	// Don't continue until all of our listeners really exited
+	Liwg.Wait()
 
 	// Shut the rest of everything down
 	AttemptShutdown()
