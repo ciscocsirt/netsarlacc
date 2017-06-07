@@ -31,14 +31,24 @@ type ListenInfo struct {
 	Host        string
 	Port        string
 	Proto       string
+	App         string
 	TLS         bool
 	Socket      net.Listener
 }
 
+type ConnInfo struct {
+	Host        string
+	Port        string
+	Proto       string
+	App         string
+	TLS         bool
+	Conn        net.Conn
+}
+
 var (
 	ListenList = []ListenInfo{
-		ListenInfo{Host: "0.0.0.0", Port: "8000", Proto: "tcp", TLS: false},
-		ListenInfo{Host: "0.0.0.0", Port: "8443", Proto: "tcp", TLS: true},
+		ListenInfo{Host: "0.0.0.0", Port: "8000", Proto: "tcp", App: "http", TLS: false},
+		ListenInfo{Host: "0.0.0.0", Port: "8443", Proto: "tcp", App: "http", TLS: true},
 	}
         sinkHost, _      = os.Hostname()
         NWorkers         = flag.Int("n", 4, "The number of workers to start")
@@ -164,7 +174,14 @@ func main() {
 						AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
 					}
 				} else {
-					go Collector(connection)
+					Ci := *new(ConnInfo)
+					Ci.Host = (*Li).Host
+					Ci.Port = (*Li).Port
+					Ci.Proto = (*Li).Proto
+					Ci.App = (*Li).App
+					Ci.TLS = (*Li).TLS
+					Ci.Conn = connection
+					Collector(Ci)
 				}
 			}
 		}()

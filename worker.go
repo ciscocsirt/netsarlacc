@@ -20,11 +20,11 @@ import (
 
 // NewWorker creates, and returns a new Worker object. Its only argument
 // is a channel that the worker can add itself to whenever it is done its
-// work.
-func NewWorker(workerQueue chan chan WorkRequest) Worker {
+// work
+func NewWorker(workerQueue chan chan ConnInfo) Worker {
 	//Creating the worker
 	worker := Worker{
-		Work:        make(chan WorkRequest),
+		Work:        make(chan ConnInfo),
 		WorkerQueue: workerQueue,
 		QuitChan:    make(chan bool)}
 
@@ -32,8 +32,8 @@ func NewWorker(workerQueue chan chan WorkRequest) Worker {
 }
 
 type Worker struct {
-	Work        chan WorkRequest
-	WorkerQueue chan chan WorkRequest
+	Work        chan ConnInfo
+	WorkerQueue chan chan ConnInfo
 	QuitChan    chan bool
 }
 
@@ -55,12 +55,17 @@ type EncodedConn struct {
 type LoggedRequest struct {
 	Timestamp string `json:"timestamp"`
 	Header
-	SourceIP   string `json:"src_ip"`
-	SourcePort string `json:"src_port"`
-	Sinkhole   string `json:"sinkhole_instance"`
+	SourceIP      string `json:"src_ip"`
+	SourcePort    string `json:"src_port"`
+	Sinkhole      string `json:"sinkhole_instance"`
+	SinkholeAddr  string `json:"sinkhole_addr"`
+	SinkholePort  string `json:"sinkhole_port"`
+	SinkholeProto string `json:"sinkhole_proto"`
+	SinkholeApp   string `json:"sinkhole_app"`
+	SinkholeTLS   bool   `json:"sinkhole_tls"`
 	EncodedConn
-	ReqError bool   `json:"request_error"`
-	ErrorMsg string `json:"request_error_message,omitempty"`
+	ReqError      bool   `json:"request_error"`
+	ErrorMsg      string `json:"request_error_message,omitempty"`
 }
 
 // This function "starts" the worker by starting a goroutine, that is
@@ -84,19 +89,24 @@ func (w *Worker) Start() {
 				// return validConnLogging, nil
 				req_log.Timestamp = time.Now().UTC().String()
 				req_log.Sinkhole = *SinkholeInstance
+				req_log.SinkholeAddr = work.Host
+				req_log.SinkholePort = work.Port
+				req_log.SinkholeProto = work.Proto
+				req_log.SinkholeApp = work.App
+				req_log.SinkholeTLS = work.TLS
 
 				var err error
 				var nerr error // For when we make a new error
-				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Connection.RemoteAddr().String())
+				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Conn.RemoteAddr().String())
 				if err != nil {
 					AppLogger(errors.New(fmt.Sprintf("Error getting socket endpoint: %s", err.Error())))
-					work.Connection.Close()
+					work.Conn.Close()
 
 					break
 				}
 
-				work.Connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-				bufSize, err := work.Connection.Read(buf)
+				work.Conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+				bufSize, err := work.Conn.Read(buf)
 
 				req_log.Header.BytesClient = strconv.Itoa(bufSize)
 
@@ -112,14 +122,14 @@ func (w *Worker) Start() {
 					if err != nil {
 						AppLogger(err)
 
-						err = work.Connection.Close()
+						err = work.Conn.Close()
 						AppLogger(err)
 						break
 					} else {
 						Logchan <- jsonLog
 					}
 
-					err = work.Connection.Close()
+					err = work.Conn.Close()
 					AppLogger(err)
 				} else {
 					err := parseConn(buf, bufSize, &req_log)
@@ -129,21 +139,21 @@ func (w *Worker) Start() {
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						} else {
 							Logchan <- jsonLog
 						}
 
-						err = work.Connection.Close()
+						err = work.Conn.Close()
 						AppLogger(err)
 					} else {
 						jsonLog, err := ToJSON(req_log)
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						} else {
@@ -154,7 +164,7 @@ func (w *Worker) Start() {
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
@@ -163,7 +173,7 @@ func (w *Worker) Start() {
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
@@ -172,7 +182,7 @@ func (w *Worker) Start() {
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
@@ -193,7 +203,7 @@ func (w *Worker) Start() {
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
@@ -203,33 +213,33 @@ func (w *Worker) Start() {
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
 
 						tmplBytes := tmplFilled.Bytes()
-						_, err = work.Connection.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: %d\r\n\r\n",  len(tmplBytes))))
+						_, err = work.Conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nContent-Length: %d\r\n\r\n",  len(tmplBytes))))
 
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
 
-						_, err = work.Connection.Write(tmplBytes)
+						_, err = work.Conn.Write(tmplBytes)
 
 						if err != nil {
 							AppLogger(err)
 
-							err = work.Connection.Close()
+							err = work.Conn.Close()
 							AppLogger(err)
 							break
 						}
 
-						err = work.Connection.Close()
+						err = work.Conn.Close()
 						AppLogger(err)
 					}
 				}
@@ -245,7 +255,7 @@ func (w *Worker) Start() {
 }
 
 // Stop tells the worker to stop listening for work requests.
-// Note that the worker will only stop *after* it has finished its work.
+// Note that the worker will only stop *after* it has finished its work
 func (w *Worker) Stop() {
 	w.QuitChan <- true
 	// fmt.Fprintln(os.Stderr, "Worker got stop call")

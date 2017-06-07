@@ -1,14 +1,14 @@
 package main
 
 var (
-	WorkerQueue chan chan WorkRequest
+	WorkerQueue chan chan ConnInfo
 	WorkerSlice = make([]Worker, 0)
 )
 
 
 func StartDispatcher(nworkers int) {
 	// First, initialize the channel we are going to put the workers' work channels into.
-	WorkerQueue = make(chan chan WorkRequest, nworkers)
+	WorkerQueue = make(chan chan ConnInfo, nworkers)
 
 	// Now, create all of our workers.
 	for i := 0; i < nworkers; i++ {
