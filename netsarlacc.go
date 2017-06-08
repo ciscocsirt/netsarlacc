@@ -148,7 +148,7 @@ func main() {
 	// Iterate over the sockets we want to listen on
 	stopacceptmutex := &sync.RWMutex{}
 	stopaccept := false
-	var Liwg sync.WaitGroup
+	var Liwg sync.WaitGroup // Create the waitgroup
 	for i, _ := range ListenList {
 		// Get a pointer to the listen info
 		Li := &(ListenList[i])
@@ -500,7 +500,16 @@ func DaemonizeProc() (*int, error) {
 	pidlockchan := make(chan error, 1)
 	pipeerrchan := make(chan error, 1)
 
-	_, daemonVarExists := os.LookupEnv("_NETSARLACC_DAEMON")
+	// The better option here is to use os.LookupEnv
+	// which returns both the variable value and whether or not
+	// the var existed at all but that was added with Go 1.5
+	// so for the sake of backwards compatability we'll go with
+	// os.Getenv instead
+	// _, daemonVarExists := os.LookupEnv("_NETSARLACC_DAEMON")
+	daemonVarExists := false
+	if os.Getenv("_NETSARLACC_DAEMON") != "" {
+		daemonVarExists = true
+	}
 
 	if daemonVarExists == true {
 		// We're the started daemon
