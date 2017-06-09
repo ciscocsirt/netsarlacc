@@ -24,7 +24,7 @@ func AppLogger(err error) {
 	fmt.Fprintln(os.Stderr, err.Error())
 
 	// Now send this error to syslog
-        logwriter, e := syslog.New(syslog.LOG_CRIT, "netsarlacc")
+        logwriter, e := syslog.New(syslog.LOG_CRIT, PROGNAME)
         if e == nil {
                 log.SetOutput(logwriter)
 		log.Print(err)
@@ -36,7 +36,7 @@ func AppLogger(err error) {
 
 func getFileName() string {
 	now := time.Now()
-	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", LogBaseName, now.Format("2006-01-02-15-04-05")))
+	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", *LogBaseName, now.Format("2006-01-02-15-04-05")))
 }
 
 

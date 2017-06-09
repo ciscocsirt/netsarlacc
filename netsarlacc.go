@@ -28,6 +28,10 @@ import (
 // -- Test with real connections
 // -- Format for writing to files
 
+const (
+	PROGNAME = "netsarlacc"
+)
+
 type ListenInfo struct {
 	Host        string
 	Port        string
@@ -55,10 +59,12 @@ var (
 	}
         sinkHost, _      = os.Hostname()
         NWorkers         = flag.Int("n", 4, "The number of workers to start")
-        SinkholeInstance = flag.String("i", "netsarlacc-" + sinkHost, "The sinkhole instance name")
+        SinkholeInstance = flag.String("i", fmt.Sprintf("%s-%s", PROGNAME, sinkHost), "The sinkhole instance name")
 	Daemonize        = flag.Bool("D", false, "Daemonize the sinkhole")
-	LogBaseName      = "sinkhole" // Logs will start with this name
-        Logchan = make(chan string, 1024)
+	DaemonEnvVar     = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
+	LogBaseName      = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
+	LogChanLen       = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
+        Logchan chan string
 	Stopchan = make(chan os.Signal, 1)
 	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
@@ -89,8 +95,10 @@ var (
 
 type Config struct {
 	Daemonize        bool
+	DaemonEnvVar     string
 	Workers          int
-	LogName          string
+	LogBufferLen     int
+	LogPrefix        string
 	WorkingDirectory string
 	LogDirectory     string
 	HTTPTemplate     string
@@ -125,6 +133,12 @@ func main() {
 		FatalAbort(false, -1)
 	}
 
+	// Make sure the workers parameter isn't stupid
+	if *NWorkers < 1 {
+		AppLogger(errors.New("The number of workers must be at least 1"))
+		FatalAbort(false, -1)
+	}
+
 	// Check if we should daemonize
 	if *Daemonize == true {
 		pid, err := DaemonizeProc()
@@ -140,9 +154,13 @@ func main() {
 		}
 	}
 
-        //starts the dispatcher
+        // Start the dispatcher that feeds workers
+	// work as well as starting all the workers
+	AppLogger(errors.New(fmt.Sprintf("Starting %d workers", *NWorkers)))
         StartDispatcher(*NWorkers)
-        //starts the log channel
+
+        // Start the log channel
+	Logchan = make(chan string, *LogChanLen)
         go writeLogger(Logchan)
 
 	// Iterate over the sockets we want to listen on
@@ -190,7 +208,19 @@ func main() {
 				}
 			} else {
 				// Listener specific key paths
-				tlscer, err = tls.LoadX509KeyPair((*Li).TLSCert, (*Li).TLSKey)
+				certfullpath, err := Fullpath((*Li).TLSCert)
+				if err != nil {
+					AppLogger(errors.New(fmt.Sprintf("Unable to load listener-specific TLS cert: %s", err.Error())))
+					FatalAbort(false, -1)
+				}
+
+				keyfullpath, err := Fullpath((*Li).TLSKey)
+				if err != nil {
+					AppLogger(errors.New(fmt.Sprintf("Unable to load listener-specific TLS key: %s", err.Error())))
+					FatalAbort(false, -1)
+				}
+
+				tlscer, err = tls.LoadX509KeyPair(certfullpath, keyfullpath)
 
 				if err != nil {
 					AppLogger(errors.New(fmt.Sprintf("Unable to load listener-specific TLS cert / key: %s", err.Error())))
@@ -458,11 +488,27 @@ func LoadConfig(filename string) error {
 		return errors.New(fmt.Sprintf("Unable to parse config file: %s", err.Error()))
 	}
 
+
+	// Let the -D flag still work
+	if conf.Daemonize == true {
+		Daemonize        = &(conf.Daemonize)
+	}
+	// Allow not specifying workers in config not to
+	// override default or cmdline param
+	if conf.Workers > 0 {
+		NWorkers         = &(conf.Workers)
+	}
+
+	if conf.LogBufferLen >= 0 {
+		LogChanLen         = &(conf.LogBufferLen)
+	}
+
 	// Now copy any non-blank / non-nil values to our flag vars
-	Daemonize        = &(conf.Daemonize)
-	NWorkers         = &(conf.Workers)
-	if conf.LogName != "" {
-		FlpathLogDir     = &(conf.LogName)
+	if conf.DaemonEnvVar != "" {
+		DaemonEnvVar     = &(conf.DaemonEnvVar)
+	}
+	if conf.LogPrefix != "" {
+		LogBaseName      = &(conf.LogPrefix)
 	}
 	if conf.WorkingDirectory != "" {
 		FlpathWorkingDir = &(conf.WorkingDirectory)
@@ -482,6 +528,8 @@ func LoadConfig(filename string) error {
 	if conf.TLSKey != "" {
 		FlpathTLSKey     = &(conf.TLSKey)
 	}
+
+	// If a listen list was specified, override built in list
 	if len(conf.ListenList) > 0 {
 		ListenList = conf.ListenList
 	}
@@ -505,9 +553,9 @@ func DaemonizeProc() (*int, error) {
 	// the var existed at all but that was added with Go 1.5
 	// so for the sake of backwards compatability we'll go with
 	// os.Getenv instead
-	// _, daemonVarExists := os.LookupEnv("_NETSARLACC_DAEMON")
+	// _, daemonVarExists := os.LookupEnv(*DaemonEnvVar)
 	daemonVarExists := false
-	if os.Getenv("_NETSARLACC_DAEMON") != "" {
+	if os.Getenv(*DaemonEnvVar) != "" {
 		daemonVarExists = true
 	}
 
@@ -516,7 +564,7 @@ func DaemonizeProc() (*int, error) {
 		Daemonized = true
 
 		// Unset the env var
-		err := os.Unsetenv("_NETSARLACC_DAEMON")
+		err := os.Unsetenv(*DaemonEnvVar)
 
 		if err != nil {
 			return nil, err
@@ -685,7 +733,7 @@ func DaemonizeProc() (*int, error) {
 		attrs.Files = []uintptr{f_devnull.Fd(), f_devnull.Fd(), f_devnull.Fd(), pipew.Fd()}
 
 		// Tell the next process it's the deamon
-		os.Setenv("_NETSARLACC_DAEMON", "true")
+		os.Setenv(*DaemonEnvVar, "true")
 
 		// Copy our environment to the proc attributes
 		attrs.Env = os.Environ()
