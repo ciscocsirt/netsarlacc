@@ -10,6 +10,7 @@ import (
 	"sync"
 	"errors"
 	"path/filepath"
+	"syscall"
 )
 
 
@@ -51,30 +52,56 @@ func writeLogger(Logchan chan string) {
         //ticker and file rotation goroutine
         ticker := time.NewTicker(time.Minute * 10)
         go func() {
-        	//get current datetime and creates filename based on current time
 		newfilemutex.Lock()
         	filename := getFileName()
 
-        	//create inital file
+        	// create inital file
         	logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
         	if err != nil {
                 	AppLogger(err)
 			FatalAbort(false, -1)
        		}
+
+		// Get an OS-level advisory lock on this file to prevent
+		// accidental stomping by a second instance of netsarlacc
+		err := syscall.Flock(int(logFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err != nil {
+			AppLogger(errors.New(fmt.Sprintf("Unable to acquire lock on log file: %s", err.Error())))
+			FatalAbort(false, -1)
+		}
+
 		newfilemutex.Unlock()
 
                 for {
 			select {
 			case <-ticker.C:
 				newfilemutex.Lock()
+
+				// release the file lock
+				err = syscall.Flock(int(logFile.Fd()), syscall.LOCK_UN)
+				if err != nil {
+					AppLogger(errors.New(fmt.Sprintf("Unable to release lock on log file: %s", err.Error())))
+					FatalAbort(false, -1)
+				}
+
 				logFile.Close()
-				//get current datetime and creates filename based on current time
+
+				// Get the name of a new file
 				filename := getFileName()
+
 				logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
 				if err != nil {
 					AppLogger(err)
 					FatalAbort(false, -1)
 				}
+
+				// Get a new file lock
+				err := syscall.Flock(int(logFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+				if err != nil {
+					AppLogger(errors.New(fmt.Sprintf("Unable to acquire lock on log file: %s", err.Error())))
+					FatalAbort(false, -1)
+				}
+
 				newfilemutex.Unlock()
 
 			case <-LogRotstopchan:
@@ -84,6 +111,7 @@ func writeLogger(Logchan chan string) {
 		}
         }()
 
+	// This is the main loop that grabs logs and writes them to a file
         for l := range Logchan {
 		newfilemutex.Lock()
 		_, err := io.WriteString(logFile, l + "\n")
@@ -104,6 +132,13 @@ func writeLogger(Logchan chan string) {
 	case <-time.After(time.Second * 5):
 		AppLogger(errors.New("Timed out waiting for log rotation goroutine to stop!"))
 		break
+	}
+
+	// release the lock on the final log file
+	err = syscall.Flock(int(logFile.Fd()), syscall.LOCK_UN)
+	if err != nil {
+		AppLogger(errors.New(fmt.Sprintf("Unable to release lock on log file: %s", err.Error())))
+		FatalAbort(false, -1)
 	}
 
 	// Close out the current log file
