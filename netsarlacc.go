@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"sync"
 	"encoding/json"
+	// "runtime/pprof" // for profiling code
 )
 
 //TODO:
@@ -92,6 +93,8 @@ var (
 	pathPIDFile    string
 )
 
+// For profiling
+// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 type Config struct {
 	Daemonize        bool
@@ -116,6 +119,16 @@ func main() {
 
         // Parse the command-line flags.
         flag.Parse()
+
+	// Profiling
+	//if *cpuprofile != "" {
+	//	f, err := os.Create(*cpuprofile)
+	//	if err != nil {
+	//		AppLogger(err)
+	//	}
+	//	pprof.StartCPUProfile(f)
+	//	defer pprof.StopCPUProfile()
+	//}
 
 	// Fill out paths
 	err := ResolvePaths()
