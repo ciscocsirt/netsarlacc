@@ -11,7 +11,6 @@ import (
 	"io/ioutil"
 	"net"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -91,16 +90,15 @@ func (w *Worker) Start() {
 			w.WorkerQueue <- w.Work
 			select {
 			case work := <-w.Work:
-				// Receive a work request.
+
+				// Make enough space to recieve client bytes
 				buf := make([]byte, 4096)
-				// Total request reads no more than 4kb set caps
-				// Sets a read dead line. If it doesn't receive any information
 
 				// This is where we're going to store everything we log about this connection
 				var req_log LoggedRequest
 
-				//validConnLogging := LoggedRequest{Timestamp: time.Now().UTC().String(), Header: req_header, SourceIP: sourceIP, SourcePort: sourcePort, Sinkhole: SinkholeInstance, EncodedConn: raw}
-				// return validConnLogging, nil
+				// Fill out the basic info for a request based on
+				// the data we have at this moment
 				req_log.Timestamp = time.Now().UTC().String()
 				req_log.Sinkhole = *SinkholeInstance
 				req_log.SinkholeAddr = work.Host
@@ -113,22 +111,29 @@ func (w *Worker) Start() {
 				var nerr error // For when we make a new error
 				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Conn.RemoteAddr().String())
 				if err != nil {
+					// Neither of these should ever happen
+					// and if they do, they probably aren't a "client error"
+					// so we'll log both
 					AppLogger(errors.New(fmt.Sprintf("Error getting socket endpoint: %s", err.Error())))
-					work.Conn.Close()
+
+					err = work.Conn.Close()
+					AppLogger(err)
 
 					break
 				}
 
-				work.Conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+				work.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
 				bufSize, err := work.Conn.Read(buf)
 
-				req_log.Header.BytesClient = strconv.Itoa(bufSize)
+				req_log.Header.BytesClient = fmt.Sprintf("%d", bufSize)
 
 				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
 
 				if err != nil {
 					nerr = errors.New(fmt.Sprintf("Error reading on socket: %s", err.Error()))
-					AppLogger(nerr)
+					if *LogClientErrors == true {
+						AppLogger(nerr)
+					}
 
 					req_log.ReqError = true
 					req_log.ErrorMsg = nerr.Error()
@@ -137,14 +142,18 @@ func (w *Worker) Start() {
 						AppLogger(err)
 
 						err = work.Conn.Close()
-						AppLogger(err)
+						if *LogClientErrors == true {
+							AppLogger(err)
+						}
 						break
 					} else {
-						Logchan <- jsonLog
+						queueLog(jsonLog)
 					}
 
 					err = work.Conn.Close()
-					AppLogger(err)
+					if *LogClientErrors == true {
+						AppLogger(err)
+					}
 				} else {
 					var err error
 					if work.App == "http" {
@@ -160,24 +169,30 @@ func (w *Worker) Start() {
 							AppLogger(err)
 
 							err = work.Conn.Close()
-							AppLogger(err)
+							if *LogClientErrors == true {
+								AppLogger(err)
+							}
 							break
 						} else {
-							Logchan <- jsonLog
+							queueLog(jsonLog)
 						}
 
 						err = work.Conn.Close()
-						AppLogger(err)
+						if *LogClientErrors == true {
+							AppLogger(err)
+						}
 					} else {
 						jsonLog, err := ToJSON(req_log)
 						if err != nil {
 							AppLogger(err)
 
 							err = work.Conn.Close()
-							AppLogger(err)
+							if *LogClientErrors == true {
+								AppLogger(err)
+							}
 							break
 						} else {
-							Logchan <- jsonLog
+							queueLog(jsonLog)
 						}
 
 						// Build the reponse using the template
@@ -186,32 +201,36 @@ func (w *Worker) Start() {
 							AppLogger(err)
 
 							err = work.Conn.Close()
-							AppLogger(err)
+							if *LogClientErrors == true {
+								AppLogger(err)
+							}
 							break
 						}
 
-						_, err = work.Conn.Write([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html;\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",  len(tmplBytes))))
+						// Mash the entire HTTP header and the template bytes into one write.
+						// If this wasn't done in one write we'd need to turn off Nagle's algorithm
+						// with "func (c *TCPConn) SetNoDelay(noDelay bool) error" so that the OS
+						// doesn't do two seperate sends which is inefficient and may confuse
+						// some clients that expect to get at least some of the body
+						// at the same time they get the header
+						_, err = work.Conn.Write(append([]byte(fmt.Sprintf("%s 200 OK\r\nServer: %s\r\nContent-Type: text/html;\r\nConnection: close\r\nContent-Length: %d\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n", req_log.Header.Version, PROGNAME, len(tmplBytes))), tmplBytes...))
 
 						if err != nil {
-							AppLogger(err)
+							if *LogClientErrors == true {
+								AppLogger(err)
+							}
 
 							err = work.Conn.Close()
-							AppLogger(err)
-							break
-						}
-
-						_, err = work.Conn.Write(tmplBytes)
-
-						if err != nil {
-							AppLogger(err)
-
-							err = work.Conn.Close()
-							AppLogger(err)
+							if *LogClientErrors == true {
+								AppLogger(err)
+							}
 							break
 						}
 
 						err = work.Conn.Close()
-						AppLogger(err)
+						if *LogClientErrors == true {
+							AppLogger(err)
+						}
 					}
 				}
 
@@ -254,12 +273,12 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 				req_log.Header.Version = string(matches[3])
 			} else {
 				req_log.ReqError = true
-				req_log.ErrorMsg = `Request header failed regex validation`
+				req_log.ErrorMsg = "Request header failed regex validation"
 				return errors.New(req_log.ErrorMsg)
 			}
 		} else {
 			req_log.ReqError = true
-			req_log.ErrorMsg = `First request line was truncated`
+			req_log.ErrorMsg = "First request line was truncated"
 			return errors.New(req_log.ErrorMsg)
 		}
 	} else {
@@ -278,7 +297,7 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 		}
 		if lineprefix == true {
 			req_log.ReqError = true
-			req_log.ErrorMsg = `Found truncated header`
+			req_log.ErrorMsg = "Found truncated header"
 			return errors.New(req_log.ErrorMsg)
 		}
 		bufstr := string(bufline)
@@ -292,13 +311,13 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 			header_can := strings.ToLower(matches[1])
 			if _, ok := allHeaders[header_can]; ok {
 				req_log.ReqError = true
-				req_log.ErrorMsg = `Got duplicate header from client`
+				req_log.ErrorMsg = "Got duplicate header from client"
 				return errors.New(req_log.ErrorMsg)
 			}
 			allHeaders[header_can] = matches[2]
 		} else {
 			req_log.ReqError = true
-			req_log.ErrorMsg = `Header failed regex validation`
+			req_log.ErrorMsg = "Header failed regex validation"
 			return errors.New(req_log.ErrorMsg)
 		}
 	}
@@ -333,13 +352,13 @@ func fillTemplateHTTP(req_log *LoggedRequest) ([]byte, error) {
 
 		funcMap := template.FuncMap{
 			"Date": func(s string) string {
-				tmp := strings.Fields(s)
-				return fmt.Sprintf("%s", tmp[0])
+				flds := strings.Fields(s)
+				return fmt.Sprintf("%s", flds[0])
 
 			},
 			"Time": func(s string) string {
-				tmp := strings.Fields(s)
-				return fmt.Sprintf("%s", tmp[1])
+				flds := strings.Fields(s)
+				return fmt.Sprintf("%s", flds[1])
 
 			},
 		}
@@ -361,10 +380,12 @@ func fillTemplateHTTP(req_log *LoggedRequest) ([]byte, error) {
 }
 
 // ToJSON converts a struct to a JSON string
-func ToJSON(data interface{}) (string, error) {
-	b, err := json.Marshal(data)
+func ToJSON(data interface{}) ([]byte, error) {
+	jsonBytes, err := json.Marshal(data)
+
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(b), nil
+
+	return append(jsonBytes, "\n"...), nil
 }

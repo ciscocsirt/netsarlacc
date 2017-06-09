@@ -58,14 +58,15 @@ var (
 		ListenInfo{Host: "0.0.0.0", Port: "8000", Proto: "tcp", App: "http", TLS: false},
 		ListenInfo{Host: "0.0.0.0", Port: "8443", Proto: "tcp", App: "http", TLS: true},
 	}
-        sinkHost, _      = os.Hostname()
-        NWorkers         = flag.Int("n", 4, "The number of workers to start")
-        SinkholeInstance = flag.String("i", fmt.Sprintf("%s-%s", PROGNAME, sinkHost), "The sinkhole instance name")
-	Daemonize        = flag.Bool("D", false, "Daemonize the sinkhole")
-	DaemonEnvVar     = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
-	LogBaseName      = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
-	LogChanLen       = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
-        Logchan chan string
+        sinkHost, _       = os.Hostname()
+        NWorkers          = flag.Int("n", 4, "The number of workers to start")
+        SinkholeInstance  = flag.String("i", fmt.Sprintf("%s-%s", PROGNAME, sinkHost), "The sinkhole instance name")
+	Daemonize         = flag.Bool("D", false, "Daemonize the sinkhole")
+	DaemonEnvVar      = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
+	LogClientErrors   = flag.Bool("log-client-errors", false, "Report client-based errors to syslog / stderr")
+	LogBaseName       = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
+	LogChanLen        = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
+	ClientReadTimeout = flag.Int("client-read-timeout", 300, "Number of milliseconds before giving up trying to read client request")
 	Stopchan = make(chan os.Signal, 1)
 	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
@@ -97,18 +98,20 @@ var (
 // var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 type Config struct {
-	Daemonize        bool
-	DaemonEnvVar     string
-	Workers          int
-	LogBufferLen     int
-	LogPrefix        string
-	WorkingDirectory string
-	LogDirectory     string
-	HTTPTemplate     string
-	PIDFile          string
-	TLSCert          string
-	TLSKey           string
-	ListenList       []ListenInfo
+	Daemonize         bool
+	DaemonEnvVar      string
+	LogClientErrors   bool
+	ClientReadTimeout int
+	Workers           int
+	LogBufferLen      int
+	LogPrefix         string
+	WorkingDirectory  string
+	LogDirectory      string
+	HTTPTemplate      string
+	PIDFile           string
+	TLSCert           string
+	TLSKey            string
+	ListenList        []ListenInfo
 }
 
 
@@ -152,6 +155,12 @@ func main() {
 		FatalAbort(false, -1)
 	}
 
+	// Make sure the client read timeout parameter isn't stupid
+	if *ClientReadTimeout < 1 {
+		AppLogger(errors.New("The number client read timeout must be at least 1 millisecond"))
+		FatalAbort(false, -1)
+	}
+
 	// Check if we should daemonize
 	if *Daemonize == true {
 		pid, err := DaemonizeProc()
@@ -173,8 +182,7 @@ func main() {
         StartDispatcher(*NWorkers)
 
         // Start the log channel
-	Logchan = make(chan string, *LogChanLen)
-        go writeLogger(Logchan)
+        go writeLogger(*LogChanLen)
 
 	// Iterate over the sockets we want to listen on
 	stopacceptmutex := &sync.RWMutex{}
@@ -506,6 +514,7 @@ func LoadConfig(filename string) error {
 	if conf.Daemonize == true {
 		Daemonize        = &(conf.Daemonize)
 	}
+
 	// Allow not specifying workers in config not to
 	// override default or cmdline param
 	if conf.Workers > 0 {
@@ -514,6 +523,17 @@ func LoadConfig(filename string) error {
 
 	if conf.LogBufferLen >= 0 {
 		LogChanLen         = &(conf.LogBufferLen)
+	}
+
+	// Allow client errors flag to work on cmdline if not in config
+	if conf.LogClientErrors == true {
+		LogClientErrors = &(conf.LogClientErrors)
+	}
+
+	// Allow not specifying the client read timeout
+	// override default or cmdline param
+	if conf.ClientReadTimeout > 0 {
+		ClientReadTimeout = &(conf.ClientReadTimeout)
 	}
 
 	// Now copy any non-blank / non-nil values to our flag vars

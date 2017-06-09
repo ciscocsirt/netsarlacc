@@ -5,12 +5,16 @@ import (
         "log/syslog"
         "fmt"
         "os"
-        "io"
         "time"
 	"sync"
 	"errors"
 	"path/filepath"
 	"syscall"
+)
+
+
+var (
+	Logchan chan []byte
 )
 
 
@@ -41,11 +45,19 @@ func getFileName() string {
 }
 
 
-func writeLogger(Logchan chan string) {
+func queueLog(logbytes []byte) {
+	Logchan <- logbytes
+}
+
+
+func writeLogger(logbuflen int) {
         //variables
         var logFile *os.File
 	var err error
+
 	newfilemutex := &sync.Mutex{}
+
+	Logchan = make(chan []byte, logbuflen) // Allocate our main logging channel
 	LogRotstopchan := make(chan bool, 1)
 	LogRotstopedchan := make(chan bool, 1)
 
@@ -114,7 +126,7 @@ func writeLogger(Logchan chan string) {
 	// This is the main loop that grabs logs and writes them to a file
         for l := range Logchan {
 		newfilemutex.Lock()
-		_, err := io.WriteString(logFile, l + "\n")
+		_, err := logFile.Write(l)
 		if err != nil {
 			AppLogger(err)
 			FatalAbort(false, -1)
