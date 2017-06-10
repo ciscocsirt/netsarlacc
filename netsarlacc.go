@@ -835,3 +835,15 @@ func DaemonizeProc() (*int, error) {
 		return &pid, nil
 	}
 }
+
+
+func getTime() time.Time {
+	now := time.Now()
+
+	// Use the timezone offset to compute UTC time unless we're supposed to log in localtime
+	if (*UseLocaltime) == false {
+		now = now.UTC()
+	}
+
+	return now
+}

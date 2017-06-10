@@ -98,11 +98,7 @@ func (w *Worker) Start() {
 				var req_log LoggedRequest
 
 				// Do the time computations
-				now := time.Now()
-				// Use the timezone offset to compute UTC time unless we're supposed to log in localtime
-				if (*UseLocaltime) == false {
-					now = now.UTC()
-				}
+				now := getTime()
 
 				// Fill out the basic info for a request based on
 				// the data we have at this moment

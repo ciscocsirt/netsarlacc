@@ -39,15 +39,16 @@ func AppLogger(err error) {
 }
 
 
-func getFileName() string {
-	now := time.Now()
+func getFileName(now time.Time) string {
 
-	// Use the timezone offset to compute UTC time unless we're supposed to log in localtime
-	if (*UseLocaltime) == false {
-		now = now.UTC()
-	}
+	// This could be called with a timestamp not on a min % 10 == 0 boundary
+	// so we need to subtract off some minutes.
+	// The reason not to use Truncate() here is that truncate operates on absolute
+	// time and in our given timezone there could be a shift by
+	// 15 minutes which could interfere with the % 10 == 0 math.
+	now = now.Add(-(time.Duration(now.Minute() % 10) * time.Minute))
 
-	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", *LogBaseName, now.Format("2006-01-02-15-04-05-MST")))
+	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", *LogBaseName, now.Format("2006-01-02-15-04-MST")))
 }
 
 
@@ -67,14 +68,20 @@ func writeLogger(logbuflen int) {
 	LogRotstopchan := make(chan bool, 1)
 	LogRotstopedchan := make(chan bool, 1)
 
-        //ticker and file rotation goroutine
-        ticker := time.NewTicker(time.Minute * 10)
+	// Make a ticker channel that wakes us up to check if we need to rotate the log
+	ticker := time.NewTicker(time.Millisecond * 250) // four times a second should be often enough
         go func() {
+
+		// This is the first time so no file is open yet so
+		// we'll open a file and store it's name and then
+		// after that we'll wake up several times a second to
+		// see if we need to rotate the filename yet
+
 		newfilemutex.Lock()
-        	filename := getFileName()
+        	curfilename := getFileName(getTime())
 
         	// create inital file
-        	logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
+        	logFile, err = os.OpenFile(curfilename, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
         	if err != nil {
                 	AppLogger(err)
 			FatalAbort(false, -1)
@@ -93,35 +100,50 @@ func writeLogger(logbuflen int) {
                 for {
 			select {
 			case <-ticker.C:
-				newfilemutex.Lock()
 
-				// release the file lock
-				err = syscall.Flock(int(logFile.Fd()), syscall.LOCK_UN)
-				if err != nil {
-					AppLogger(errors.New(fmt.Sprintf("Unable to release lock on log file: %s", err.Error())))
-					FatalAbort(false, -1)
+				// We're going to rotate every 10
+				// minutes so let's check that we're
+				// at (min % 10 == 0 and sec < 2) We do
+				// sec < 2 to give us two seconds to
+				// catch a new 10 minute transition in
+				// the off case CPU is that badly
+				// loaded
+				now := getTime()
+				if ((now.Minute() % 10 == 0) && (now.Second() < 2)) {
+					newfilename := getFileName(now)
+
+					// Now if the new file name doesn't match the current one
+					// we'll need to rotate
+					if newfilename != curfilename {
+						curfilename = newfilename // We're going to rotate so store this name
+
+						newfilemutex.Lock()
+
+						// release the file lock
+						err = syscall.Flock(int(logFile.Fd()), syscall.LOCK_UN)
+						if err != nil {
+							AppLogger(errors.New(fmt.Sprintf("Unable to release lock on log file: %s", err.Error())))
+							FatalAbort(false, -1)
+						}
+
+						logFile.Close()
+
+						logFile, err = os.OpenFile(curfilename, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+						if err != nil {
+							AppLogger(err)
+							FatalAbort(false, -1)
+						}
+
+						// Get a new file lock
+						err := syscall.Flock(int(logFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+						if err != nil {
+							AppLogger(errors.New(fmt.Sprintf("Unable to acquire lock on log file: %s", err.Error())))
+							FatalAbort(false, -1)
+						}
+
+						newfilemutex.Unlock()
+					}
 				}
-
-				logFile.Close()
-
-				// Get the name of a new file
-				filename := getFileName()
-
-				logFile, err = os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
-				if err != nil {
-					AppLogger(err)
-					FatalAbort(false, -1)
-				}
-
-				// Get a new file lock
-				err := syscall.Flock(int(logFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-				if err != nil {
-					AppLogger(errors.New(fmt.Sprintf("Unable to acquire lock on log file: %s", err.Error())))
-					FatalAbort(false, -1)
-				}
-
-				newfilemutex.Unlock()
-
 			case <-LogRotstopchan:
 				LogRotstopedchan <- true
 				return
