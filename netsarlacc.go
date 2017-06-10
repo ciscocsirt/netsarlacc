@@ -67,6 +67,7 @@ var (
 	LogBaseName       = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
 	LogChanLen        = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
 	ClientReadTimeout = flag.Int("client-read-timeout", 300, "Number of milliseconds before giving up trying to read client request")
+	UseLocaltime      = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
 	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
@@ -100,6 +101,7 @@ var (
 type Config struct {
 	Daemonize         bool
 	DaemonEnvVar      string
+	UseLocaltime      bool
 	LogClientErrors   bool
 	ClientReadTimeout int
 	Workers           int
@@ -513,6 +515,11 @@ func LoadConfig(filename string) error {
 	// Let the -D flag still work
 	if conf.Daemonize == true {
 		Daemonize        = &(conf.Daemonize)
+	}
+
+	// Let the --use-localtime flag still work
+	if conf.UseLocaltime == true {
+	        UseLocaltime     = &(conf.UseLocaltime)
 	}
 
 	// Allow not specifying workers in config not to

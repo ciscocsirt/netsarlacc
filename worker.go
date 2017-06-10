@@ -97,9 +97,16 @@ func (w *Worker) Start() {
 				// This is where we're going to store everything we log about this connection
 				var req_log LoggedRequest
 
+				// Do the time computations
+				now := time.Now()
+				// Use the timezone offset to compute UTC time unless we're supposed to log in localtime
+				if (*UseLocaltime) == false {
+					now = now.UTC()
+				}
+
 				// Fill out the basic info for a request based on
 				// the data we have at this moment
-				req_log.Timestamp = time.Now().UTC().String()
+				req_log.Timestamp = now.Format("2006-01-02 15:04:05.000000 -0700 MST")
 				req_log.Sinkhole = *SinkholeInstance
 				req_log.SinkholeAddr = work.Host
 				req_log.SinkholePort = work.Port

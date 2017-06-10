@@ -41,7 +41,13 @@ func AppLogger(err error) {
 
 func getFileName() string {
 	now := time.Now()
-	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", *LogBaseName, now.Format("2006-01-02-15-04-05")))
+
+	// Use the timezone offset to compute UTC time unless we're supposed to log in localtime
+	if (*UseLocaltime) == false {
+		now = now.UTC()
+	}
+
+	return filepath.Join(pathLogDir, fmt.Sprintf("%s-%s.log", *LogBaseName, now.Format("2006-01-02-15-04-05-MST")))
 }
 
 
