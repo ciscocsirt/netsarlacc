@@ -51,6 +51,10 @@ type ConnInfo struct {
 	App         string
 	TLS         bool
 	Conn        net.Conn
+	Buffer      []byte
+	BufferSize  int
+	Time        time.Time
+	Err         error
 }
 
 var (
@@ -60,15 +64,19 @@ var (
 	}
         sinkHost, _       = os.Hostname()
         NWorkers          = flag.Int("n", 4, "The number of workers to start")
+	NReaders          = flag.Int("readers", 512, "The number of readers to start")
         SinkholeInstance  = flag.String("i", fmt.Sprintf("%s-%s", PROGNAME, sinkHost), "The sinkhole instance name")
 	Daemonize         = flag.Bool("D", false, "Daemonize the sinkhole")
 	DaemonEnvVar      = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
 	LogClientErrors   = flag.Bool("log-client-errors", false, "Report client-based errors to syslog / stderr")
 	LogBaseName       = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
 	LogChanLen        = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
+	ReadChanLen       = flag.Int("reader-queue-len", 32, "Maximum number of queued connections to read from")
+	WorkChanLen       = flag.Int("worker-queue-len", 32, "Maximum number of queued read connections to work on")
 	ClientReadTimeout = flag.Int("client-read-timeout", 300, "Number of milliseconds before giving up trying to read client request")
 	UseLocaltime      = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
+	Readerstopchan = make(chan bool, 1)
 	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
 	Daemonized = false
@@ -105,7 +113,10 @@ type Config struct {
 	LogClientErrors   bool
 	ClientReadTimeout int
 	Workers           int
+	Readers           int
 	LogBufferLen      int
+	ReaderQueueLen    int
+	WorkerQueueLen    int
 	LogPrefix         string
 	WorkingDirectory  string
 	LogDirectory      string
@@ -157,6 +168,12 @@ func main() {
 		FatalAbort(false, -1)
 	}
 
+	// Make sure the workers parameter isn't stupid
+	if *NReaders < 1 {
+		AppLogger(errors.New("The number of readers must be at least 1"))
+		FatalAbort(false, -1)
+	}
+
 	// Make sure the client read timeout parameter isn't stupid
 	if *ClientReadTimeout < 1 {
 		AppLogger(errors.New("The number client read timeout must be at least 1 millisecond"))
@@ -180,8 +197,10 @@ func main() {
 
         // Start the dispatcher that feeds workers
 	// work as well as starting all the workers
+	AppLogger(errors.New(fmt.Sprintf("Starting %d readers", *NReaders)))
+        StartReaders(*NReaders)
 	AppLogger(errors.New(fmt.Sprintf("Starting %d workers", *NWorkers)))
-        StartDispatcher(*NWorkers)
+	StartWorkers(*NWorkers)
 
         // Start the log channel
         go writeLogger(*LogChanLen)
@@ -308,7 +327,8 @@ func main() {
 					Ci.App = (*Li).App
 					Ci.TLS = (*Li).TLS
 					Ci.Conn = connection
-					Collector(Ci)
+					Ci.Time = getTime()
+					QueueRead(Ci)
 				}
 			}
 		}()
@@ -353,6 +373,21 @@ func AttemptShutdown() {
 	// The goal here is to try to stop the workers
 	// and close out the log file so that data isn't lost
 	// and the log file is left consistent
+
+	AppLogger(errors.New("Stopping readers"))
+	StopReaders()
+
+	// As workers stop, they will tell us that.  We must wait for them
+	// so that we can close the logging after the pending work is done
+	for rstopped := 0; rstopped < *NReaders; {
+		select {
+		case <-Readerstopchan:
+			rstopped++
+		case <-time.After(time.Second * 5):
+			AppLogger(errors.New("Timed out waiting for all readers to stop!"))
+			rstopped = *NReaders
+		}
+	}
 
 	AppLogger(errors.New("Stopping workers"))
 	StopWorkers()
@@ -528,8 +563,22 @@ func LoadConfig(filename string) error {
 		NWorkers         = &(conf.Workers)
 	}
 
+	// Allow not specifying readers in config not to
+	// override default or cmdline param
+	if conf.Readers > 0 {
+		NReaders         = &(conf.Readers)
+	}
+
 	if conf.LogBufferLen >= 0 {
 		LogChanLen         = &(conf.LogBufferLen)
+	}
+
+	if conf.ReaderQueueLen >= 0 {
+		ReadChanLen         = &(conf.ReaderQueueLen)
+	}
+
+	if conf.WorkerQueueLen >= 0 {
+		WorkChanLen         = &(conf.WorkerQueueLen)
 	}
 
 	// Allow client errors flag to work on cmdline if not in config

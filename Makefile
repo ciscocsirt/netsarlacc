@@ -10,7 +10,7 @@ GO=go
 # Graphite loop stuff
 CFLAGS=-Wall -Wextra -march=native -O2 -floop-interchange -fgraphite-identity -floop-block -floop-strip-mine
 
-GOFILES=netsarlacc.go collector.go dispatcher.go logger.go worker.go
+GOFILES=netsarlacc.go dispatcher.go logger.go worker.go
 
 main: gobuild
 

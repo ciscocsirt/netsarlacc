@@ -37,15 +37,18 @@ var (
 func NewWorker(workerQueue chan chan ConnInfo) Worker {
 	//Creating the worker
 	worker := Worker{
-		Work:        make(chan ConnInfo),
+		WorkQueue:   make(chan ConnInfo),
 		WorkerQueue: workerQueue,
 		QuitChan:    make(chan bool)}
 
 	return worker
 }
 
+// Allow a worker to remember its own details.
+// This works just fine for both a normal worker and
+// a ReadWorker
 type Worker struct {
-	Work        chan ConnInfo
+	WorkQueue   chan ConnInfo
 	WorkerQueue chan chan ConnInfo
 	QuitChan    chan bool
 }
@@ -83,26 +86,19 @@ type LoggedRequest struct {
 
 // This function "starts" the worker by starting a goroutine, that is
 // an infinite "for-select" loop.
-func (w *Worker) Start() {
+func (w *Worker) Work() {
 	go func() {
 		for {
 			// Add ourselves into the worker queue.
-			w.WorkerQueue <- w.Work
+			w.WorkerQueue <- w.WorkQueue
 			select {
-			case work := <-w.Work:
-
-				// Make enough space to recieve client bytes
-				buf := make([]byte, 4096)
-
+			case work := <-w.WorkQueue:
 				// This is where we're going to store everything we log about this connection
 				var req_log LoggedRequest
 
-				// Do the time computations
-				now := getTime()
-
 				// Fill out the basic info for a request based on
 				// the data we have at this moment
-				req_log.Timestamp = now.Format("2006-01-02 15:04:05.000000 -0700 MST")
+				req_log.Timestamp = work.Time.Format("2006-01-02 15:04:05.000000 -0700 MST")
 				req_log.Sinkhole = *SinkholeInstance
 				req_log.SinkholeAddr = work.Host
 				req_log.SinkholePort = work.Port
@@ -111,7 +107,6 @@ func (w *Worker) Start() {
 				req_log.SinkholeTLS = work.TLS
 
 				var err error
-				var nerr error // For when we make a new error
 				req_log.SourceIP, req_log.SourcePort, err = net.SplitHostPort(work.Conn.RemoteAddr().String())
 				if err != nil {
 					// Neither of these should ever happen
@@ -125,21 +120,18 @@ func (w *Worker) Start() {
 					break
 				}
 
-				work.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
-				bufSize, err := work.Conn.Read(buf)
+				req_log.Header.BytesClient = fmt.Sprintf("%d", work.BufferSize)
 
-				req_log.Header.BytesClient = fmt.Sprintf("%d", bufSize)
+				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(work.Buffer[:work.BufferSize])}
 
-				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(buf[:bufSize])}
-
-				if err != nil {
-					nerr = errors.New(fmt.Sprintf("Error reading on socket: %s", err.Error()))
+				if work.Err != nil {
+					err = errors.New(fmt.Sprintf("Error reading on socket: %s", work.Err.Error()))
 					if *LogClientErrors == true {
-						AppLogger(nerr)
+						AppLogger(err)
 					}
 
 					req_log.ReqError = true
-					req_log.ErrorMsg = nerr.Error()
+					req_log.ErrorMsg = err.Error()
 					jsonLog, err := ToJSON(req_log)
 					if err != nil {
 						AppLogger(err)
@@ -160,7 +152,7 @@ func (w *Worker) Start() {
 				} else {
 					var err error
 					if work.App == "http" {
-						err = parseConnHTTP(buf, bufSize, &req_log)
+						err = parseConnHTTP(work.Buffer, work.BufferSize, &req_log)
 					} else {
 						err = errors.New("Only http can be parsed at this time.")
 					}
@@ -247,12 +239,42 @@ func (w *Worker) Start() {
 	}()
 }
 
+
+func (w *Worker) Read() {
+	go func() {
+		for {
+			// Add ourselves into the reader queue.
+			w.WorkerQueue <- w.WorkQueue
+			select {
+			case read := <-w.WorkQueue:
+
+				// Make enough space to recieve client bytes
+				read.Buffer = make([]byte, 4096)
+
+				read.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
+				read.BufferSize, read.Err = read.Conn.Read(read.Buffer)
+
+				// Now that we've tried to read, queue the rest of the work
+				QueueWork(read)
+
+			case <-w.QuitChan:
+				// We have been asked to stop.
+				Readerstopchan <- true
+				// fmt.Fprintln(os.Stderr, "worker stopped")
+				return
+			}
+		}
+	}()
+}
+
+
 // Stop tells the worker to stop listening for work requests.
 // Note that the worker will only stop *after* it has finished its work
 func (w *Worker) Stop() {
 	w.QuitChan <- true
 	// fmt.Fprintln(os.Stderr, "Worker got stop call")
 }
+
 
 func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 
