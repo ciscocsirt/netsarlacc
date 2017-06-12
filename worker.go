@@ -134,23 +134,18 @@ func (w *Worker) Work() {
 					req_log.ReqError = true
 					req_log.ErrorMsg = work.Err.Error()
 
-					jsonLog, err := ToJSON(req_log)
-					if err != nil {
-						AppLogger(err)
-
-						err = work.Conn.Close()
-						if *LogClientErrors == true {
-							AppLogger(err)
-						}
-						break
-					} else {
-						queueLog(jsonLog)
-					}
-
 					err = work.Conn.Close()
 					if *LogClientErrors == true {
 						AppLogger(err)
 					}
+
+					jsonLog, err := ToJSON(req_log)
+					if err != nil {
+						AppLogger(err)
+						break
+					}
+
+					queueLog(jsonLog)
 				} else {
 
 					if work.App == "http" {
@@ -164,23 +159,19 @@ func (w *Worker) Work() {
 							AppLogger(err)
 						}
 
-						jsonLog, err := ToJSON(req_log)
-						if err != nil {
-							AppLogger(err)
-
-							err = work.Conn.Close()
-							if *LogClientErrors == true {
-								AppLogger(err)
-							}
-							break
-						} else {
-							queueLog(jsonLog)
-						}
-
 						err = work.Conn.Close()
 						if *LogClientErrors == true {
 							AppLogger(err)
 						}
+
+						jsonLog, err := ToJSON(req_log)
+						if err != nil {
+							AppLogger(err)
+
+							break
+						}
+
+						queueLog(jsonLog)
 					} else {
 						jsonLog, err := ToJSON(req_log)
 						if err != nil {
@@ -191,9 +182,9 @@ func (w *Worker) Work() {
 								AppLogger(err)
 							}
 							break
-						} else {
-							queueLog(jsonLog)
 						}
+
+						queueLog(jsonLog)
 
 						// Build the reponse using the template
 						tmplBytes, err := fillTemplateHTTP(&req_log)
@@ -204,6 +195,22 @@ func (w *Worker) Work() {
 							if *LogClientErrors == true {
 								AppLogger(err)
 							}
+							break
+						}
+
+						// Set a write deadline so we don't waste time writing to the socket
+						// if something is amiss
+						err = work.Conn.SetWriteDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientWriteTimeout)))
+						if err != nil {
+							if *LogClientErrors == true {
+								AppLogger(errors.New(fmt.Sprintf("Unable to set write deadline on socket: %s", err.Error())))
+							}
+
+							err = work.Conn.Close()
+							if *LogClientErrors == true {
+								AppLogger(err)
+							}
+
 							break
 						}
 
@@ -219,12 +226,6 @@ func (w *Worker) Work() {
 							if *LogClientErrors == true {
 								AppLogger(errors.New(fmt.Sprintf("Unable to write to socket: %s", err.Error())))
 							}
-
-							err = work.Conn.Close()
-							if *LogClientErrors == true {
-								AppLogger(err)
-							}
-							break
 						}
 
 						err = work.Conn.Close()
@@ -252,13 +253,21 @@ func (w *Worker) Read() {
 			select {
 			case read := <-w.WorkQueue:
 
+				var err error
+
 				// Make enough space to recieve client bytes
 				read.Buffer = make([]byte, 4096)
 
-				read.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
-				var err error
-				read.BufferSize, err = read.Conn.Read(read.Buffer)
+				err = read.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
+				if err != nil {
+					err = errors.New(fmt.Sprintf("Unable to set read deadline on socket: %s", err.Error()))
+					read.Err = err
 
+					QueueWork(read)
+					break
+				}
+
+				read.BufferSize, err = read.Conn.Read(read.Buffer)
 				if err != nil {
 					err = errors.New(fmt.Sprintf("Unable to read from socket: %s", err.Error()))
 				}
@@ -270,7 +279,7 @@ func (w *Worker) Read() {
 			case <-w.QuitChan:
 				// We have been asked to stop.
 				w.StoppedChan <- true
-				// fmt.Fprintln(os.Stderr, "worker stopped")
+
 				return
 			}
 		}
@@ -347,7 +356,7 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 		}
 		matches := header_re.FindStringSubmatch(bufstr)
 		if matches != nil {
-			// Canonical header name
+			// Canonical header name is lowercase
 			header_can := strings.ToLower(matches[1])
 			if _, ok := allHeaders[header_can]; ok {
 				req_log.ReqError = true
@@ -362,7 +371,7 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 		}
 	}
 
-	// Now  set some of the headers we got into the header struct
+	// Now set some of the headers we got into the header struct
 	if val, ok := allHeaders["user-agent"]; ok {
 		req_log.Header.User_Agent = val
 	}

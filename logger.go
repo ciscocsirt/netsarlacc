@@ -127,7 +127,11 @@ func writeLogger(logbuflen int) {
 							FatalAbort(false, -1)
 						}
 
-						logFile.Close()
+						err = logFile.Close()
+						if err != nil {
+							AppLogger(errors.New(fmt.Sprintf("Unable to close log file: %s", err.Error())))
+							FatalAbort(false, -1)
+						}
 
 						logFile, err = os.OpenFile(curfilename, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 						if err != nil {
@@ -184,9 +188,8 @@ func writeLogger(logbuflen int) {
 
 	// Close out the current log file
 	err = logFile.Close()
-
 	if err != nil {
-		AppLogger(err)
+		AppLogger(errors.New(fmt.Sprintf("Unable to close log file: %s", err.Error())))
 		FatalAbort(false, -1)
 	}
 

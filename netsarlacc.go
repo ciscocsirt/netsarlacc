@@ -16,19 +16,6 @@ import (
 	// "runtime/pprof" // for profiling code
 )
 
-//TODO:
-// -- Determine a payload struct for headers
-// -- ALL CAPS letters for headers up to 20 bytes up to space
-// -- URL encoding then space
-// -- http 1.1 etc
-// -- encode whole raw packet up to 4kb in one of the fileds in JSON whether it was valid or not
-// -- Stress testing APACHE for golang
-// -- Test cases
-// -- Build Template for response
-// -- Test speed and race conditions
-// -- Test with real connections
-// -- Format for writing to files
-
 const (
 	PROGNAME = "netsarlacc"
 )
@@ -62,19 +49,19 @@ var (
 		ListenInfo{Host: "0.0.0.0", Port: "8000", Proto: "tcp", App: "http", TLS: false},
 		ListenInfo{Host: "0.0.0.0", Port: "8443", Proto: "tcp", App: "http", TLS: true},
 	}
-        sinkHost, _       = os.Hostname()
-        NWorkers          = flag.Int("n", 4, "The number of workers to start")
-	NReaders          = flag.Int("readers", 512, "The number of readers to start")
-        SinkholeInstance  = flag.String("i", fmt.Sprintf("%s-%s", PROGNAME, sinkHost), "The sinkhole instance name")
-	Daemonize         = flag.Bool("D", false, "Daemonize the sinkhole")
-	DaemonEnvVar      = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
-	LogClientErrors   = flag.Bool("log-client-errors", false, "Report client-based errors to syslog / stderr")
-	LogBaseName       = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
-	LogChanLen        = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
-	ReadChanLen       = flag.Int("reader-queue-len", 32, "Maximum number of queued connections to read from")
-	WorkChanLen       = flag.Int("worker-queue-len", 32, "Maximum number of queued read connections to work on")
-	ClientReadTimeout = flag.Int("client-read-timeout", 500, "Number of milliseconds before giving up trying to read client request")
-	UseLocaltime      = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
+        NWorkers           = flag.Int("workers", 4, "The number of workers to start")
+	NReaders           = flag.Int("readers", 512, "The number of readers to start")
+        SinkholeInstance   = flag.String("name", getInstanceName(), "The sinkhole instance name")
+	Daemonize          = flag.Bool("daemonize", false, "Daemonize the sinkhole")
+	DaemonEnvVar       = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
+	LogClientErrors    = flag.Bool("log-client-errors", false, "Report client-based errors to syslog / stderr")
+	LogBaseName        = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
+	LogChanLen         = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
+	ReadChanLen        = flag.Int("reader-queue-len", 32, "Maximum number of queued connections to read from")
+	WorkChanLen        = flag.Int("worker-queue-len", 32, "Maximum number of queued read connections to work on")
+	ClientReadTimeout  = flag.Int("client-read-timeout", 500, "Number of milliseconds before giving up trying to read client request")
+	ClientWriteTimeout = flag.Int("client-write-timeout", 500, "Number of milliseconds before giving up trying to write client response")
+	UseLocaltime       = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
 	Daemonized = false
 	PidFile *os.File
@@ -100,28 +87,33 @@ var (
 	pathPIDFile    string
 )
 
-// For profiling
+// For profiling this var will need to be uncommented
 // var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
+
+// These are the options you can specify in the JSON configuration file
+// The options in the configuration file override options used on the
+// command line
 type Config struct {
-	Daemonize         bool
-	DaemonEnvVar      string
-	UseLocaltime      bool
-	LogClientErrors   bool
-	ClientReadTimeout int
-	Workers           int
-	Readers           int
-	LogBufferLen      int
-	ReaderQueueLen    int
-	WorkerQueueLen    int
-	LogPrefix         string
-	WorkingDirectory  string
-	LogDirectory      string
-	HTTPTemplate      string
-	PIDFile           string
-	TLSCert           string
-	TLSKey            string
-	ListenList        []ListenInfo
+	Daemonize          bool
+	DaemonEnvVar       string
+	UseLocaltime       bool
+	LogClientErrors    bool
+	ClientReadTimeout  int
+	ClientWriteTimeout int
+	Workers            int
+	Readers            int
+	LogBufferLen       int
+	ReaderQueueLen     int
+	WorkerQueueLen     int
+	LogPrefix          string
+	WorkingDirectory   string
+	LogDirectory       string
+	HTTPTemplate       string
+	PIDFile            string
+	TLSCert            string
+	TLSKey             string
+	ListenList         []ListenInfo
 }
 
 
@@ -133,7 +125,8 @@ func main() {
         // Parse the command-line flags.
         flag.Parse()
 
-	// Profiling
+	// Profiling can be started once the cmdline
+	// flags are done parsing
 	//if *cpuprofile != "" {
 	//	f, err := os.Create(*cpuprofile)
 	//	if err != nil {
@@ -145,7 +138,6 @@ func main() {
 
 	// Fill out paths
 	err := ResolvePaths()
-
 	if err != nil {
 		AppLogger(err)
 		FatalAbort(false, -1)
@@ -153,7 +145,6 @@ func main() {
 
 	// Load the configuration file (if it isn't blank)
 	err = LoadConfig(pathConfigFile)
-
 	if err != nil {
 		AppLogger(err)
 		FatalAbort(false, -1)
@@ -173,14 +164,22 @@ func main() {
 
 	// Make sure the client read timeout parameter isn't stupid
 	if *ClientReadTimeout < 1 {
-		AppLogger(errors.New("The number client read timeout must be at least 1 millisecond"))
+		AppLogger(errors.New("The client read timeout must be at least 1 millisecond"))
 		FatalAbort(false, -1)
 	}
+
+	// Make sure the client write timeout parameter isn't stupid
+	if *ClientWriteTimeout < 1 {
+		AppLogger(errors.New("The client write timeout must be at least 1 millisecond"))
+		FatalAbort(false, -1)
+	}
+
+	// Announce that we're starting
+	AppLogger(errors.New(fmt.Sprintf("Starting sinkhole instance %s", *SinkholeInstance)))
 
 	// Check if we should daemonize
 	if *Daemonize == true {
 		pid, err := DaemonizeProc()
-
 		if err != nil {
 			AppLogger(errors.New(fmt.Sprintf("Daemonization failed: %s", err.Error())))
 			FatalAbort(false, -1)
@@ -240,7 +239,6 @@ func main() {
 			if (*Li).TLSCert == "" {
 				// Default key paths
 				tlscer, err = tls.LoadX509KeyPair(pathTLSCert, pathTLSKey)
-
 				if err != nil {
 					AppLogger(errors.New(fmt.Sprintf("Unable to load global TLS cert / key: %s", err.Error())))
 					FatalAbort(false, -1)
@@ -260,7 +258,6 @@ func main() {
 				}
 
 				tlscer, err = tls.LoadX509KeyPair(certfullpath, keyfullpath)
-
 				if err != nil {
 					AppLogger(errors.New(fmt.Sprintf("Unable to load listener-specific TLS cert / key: %s", err.Error())))
 					FatalAbort(false, -1)
@@ -291,22 +288,23 @@ func main() {
 				// Listen for any incoming connections or possibly time out
 				connection, err := (*Li).Socket.Accept()
 
-				stopacceptmutex.RLock()
-				if stopaccept == true {
-					stopacceptmutex.RUnlock()
+				if stopaccept == true { // Check this flag
+					stopacceptmutex.RLock() // lock and check the flag again
+					if stopaccept == true {
+						stopacceptmutex.RUnlock()
 
-					// If we got a valid connection close it
-					if err == nil {
-						err = connection.Close()
-
-						if err != nil {
-							AppLogger(errors.New(fmt.Sprintf("Error connection on shutdown: %s", err.Error())))
+						// If we got a valid connection close it
+						if err == nil {
+							err = connection.Close()
+							if err != nil {
+								AppLogger(errors.New(fmt.Sprintf("Error connection on shutdown: %s", err.Error())))
+							}
 						}
-					}
 
-					return;
+						return;
+					}
+					stopacceptmutex.RUnlock()
 				}
-				stopacceptmutex.RUnlock()
 
 				if err != nil {
 					netErr, ok := err.(net.Error)
@@ -317,6 +315,10 @@ func main() {
 						AppLogger(errors.New(fmt.Sprintf("Error accepting: %s", err.Error())))
 					}
 				} else {
+					// At this point we've accepted a new connection
+					// so fill out the connection information struct
+					// and hand it off into the worker pipeline
+					// for appropriate processing
 					Ci := *new(ConnInfo)
 					Ci.Host = (*Li).Host
 					Ci.Port = (*Li).Port
@@ -325,6 +327,7 @@ func main() {
 					Ci.TLS = (*Li).TLS
 					Ci.Conn = connection
 					Ci.Time = getTime()
+
 					QueueRead(Ci)
 				}
 			}
@@ -342,11 +345,11 @@ func main() {
 		stopaccept = true
 		stopacceptmutex.Unlock()
 
-		// This will unblock any call to Accept() on this socket
 		AppLogger(errors.New("Shutting down listening sockets"))
 		for i, _ := range ListenList {
 			Li := &(ListenList[i])
 
+			// This will unblock any call to Accept() on this socket
 			err := (*Li).Socket.Close()
 
 			if err != nil {
@@ -386,7 +389,6 @@ func AttemptShutdown() {
 	if Daemonized == true {
 		AppLogger(errors.New("Releasing lock on PID file"))
 		err = syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
-
 		if err != nil {
 			AppLogger(errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error())))
 			FatalAbort(false, -1)
@@ -394,7 +396,6 @@ func AttemptShutdown() {
 
 		AppLogger(errors.New("Closing out PID file"))
 		err = PidFile.Close()
-
 		if err != nil {
 			AppLogger(errors.New(fmt.Sprintf("Unable to close pid file: %s", err.Error())))
 			FatalAbort(false, -1)
@@ -431,7 +432,6 @@ func Fullpath(filename string) (string, error) {
 
 	// Get an absolute path by joining with our working dir
 	fullpath, err := filepath.Abs(filepath.Join(pathWorkingDir, filename))
-
 	if err != nil {
 		return "", err
 	}
@@ -498,7 +498,7 @@ func LoadConfig(filename string) error {
 		return nil
 	}
 
-	conf := Config{}
+	conf := Config{} // Start with a black configurationt that will get filled out
 
 	confFh, err := os.Open(filename)
 	if err != nil {
@@ -506,11 +506,10 @@ func LoadConfig(filename string) error {
 	}
 
 	jsonDecoder := json.NewDecoder(confFh)
-	err = jsonDecoder.Decode(&conf)
+	err = jsonDecoder.Decode(&conf) // This populate the config struct
 	if err != nil {
 		return errors.New(fmt.Sprintf("Unable to parse config file: %s", err.Error()))
 	}
-
 
 	// Let the -D flag still work
 	if conf.Daemonize == true {
@@ -557,6 +556,12 @@ func LoadConfig(filename string) error {
 		ClientReadTimeout = &(conf.ClientReadTimeout)
 	}
 
+	// Allow not specifying the client write timeout
+	// override default or cmdline param
+	if conf.ClientWriteTimeout > 0 {
+		ClientWriteTimeout = &(conf.ClientWriteTimeout)
+	}
+
 	// Now copy any non-blank / non-nil values to our flag vars
 	if conf.DaemonEnvVar != "" {
 		DaemonEnvVar     = &(conf.DaemonEnvVar)
@@ -590,7 +595,6 @@ func LoadConfig(filename string) error {
 
 	// Now resolve the paths using the new parameters
 	err = ResolvePaths()
-
 	if err != nil {
 		return errors.New(fmt.Sprintf("[config file] %s", err.Error()))
 	}
@@ -619,14 +623,12 @@ func DaemonizeProc() (*int, error) {
 
 		// Unset the env var
 		err := os.Unsetenv(*DaemonEnvVar)
-
 		if err != nil {
 			return nil, err
 		}
 
 		// Break away from the parent
 		pid, err := syscall.Setsid()
-
 		if err != nil {
 			return nil, err
 		}
@@ -639,7 +641,6 @@ func DaemonizeProc() (*int, error) {
 
 		// Now open our PID file, get a lock, and write our PID to it
 		PidFile, err = os.OpenFile(pathPIDFile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
 			return nil, err
@@ -648,7 +649,6 @@ func DaemonizeProc() (*int, error) {
 		// Now try to get an exclusive lock the file descriptor
 		go func() {
 			err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-
 			if err != nil {
 				err = errors.New(fmt.Sprintf("Unable to acquire lock on pid file: %s", err.Error()))
 			}
@@ -670,7 +670,6 @@ func DaemonizeProc() (*int, error) {
 
 		// Write our PID to the file
 		_, err = PidFile.Write([]byte(fmt.Sprintf("%d\n", pid)))
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to write pid into pid file: %s", err.Error()))
 			return nil, err
@@ -689,14 +688,12 @@ func DaemonizeProc() (*int, error) {
 		// Send a message over the pipe saying we made it.  NewFile fd numbers start from 0 not 1
 		pipef := os.NewFile(3, "pipe")
 		_, err = pipef.Write([]byte("0"))
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to write to daemon pipe: %s", err.Error()))
 			return nil, err
 		}
 
 		err = pipef.Close()
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to close daemon side write pipe: %s", err.Error()))
 			return nil, err
@@ -711,7 +708,6 @@ func DaemonizeProc() (*int, error) {
 		// First we'll try to open and acquire a lock on the pid file
 		// to ensure there isn't a daemon already running
 		PidFile, err = os.OpenFile(pathPIDFile, os.O_RDONLY|os.O_CREATE, 0644)
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
 			return nil, err
@@ -720,7 +716,6 @@ func DaemonizeProc() (*int, error) {
 		// Now try to get an exclusive lock the file descriptor
 		go func() {
 			err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-
 			if err != nil {
 				err = errors.New(fmt.Sprintf("Unable to acquire lock on pid file: %s", err.Error()))
 			}
@@ -742,14 +737,12 @@ func DaemonizeProc() (*int, error) {
 
 		// The lock worked so let's release it and then close the file
 		err = syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error()))
 			return nil, err
 		}
 
 		err = PidFile.Close()
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to close pid file: %s", err.Error()))
 			return nil, err
@@ -757,7 +750,6 @@ func DaemonizeProc() (*int, error) {
 
 		// Get our exename and full path
 		exe, err := Fullpath(os.Args[0])
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to get full path of exe: %s", err.Error()))
 			return nil, err
@@ -770,7 +762,6 @@ func DaemonizeProc() (*int, error) {
 
 		// Set the new process's stdin, stdout, and stderr to /dev/null
 		f_devnull, err := os.Open("/dev/null")
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open /dev/null: %s", err.Error()))
 			return nil, err
@@ -778,7 +769,6 @@ func DaemonizeProc() (*int, error) {
 
 		// Get a pipe between us and the daemon to make sure it starts properly
 		piper, pipew, err := os.Pipe()
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to create pipe: %s", err.Error()))
 			return nil, err
@@ -794,7 +784,6 @@ func DaemonizeProc() (*int, error) {
 
 		// Try to start up the deamon process
 		pid, _, err := syscall.StartProcess(exe, os.Args, &attrs)
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to start daemon process: %s", err.Error()))
 			return nil, err
@@ -838,7 +827,6 @@ func DaemonizeProc() (*int, error) {
 		}
 
 		err = pipew.Close()
-
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to close launch side write pipe: %s", err.Error()))
 			return nil, err
@@ -860,4 +848,17 @@ func getTime() time.Time {
 	}
 
 	return now
+}
+
+
+func getInstanceName() (string) {
+
+	sinkHost, err := os.Hostname()
+	if err != nil {
+		AppLogger(errors.New(fmt.Sprintf("Unable to get local hostname: %s", err.Error())))
+
+		return PROGNAME
+	} else {
+		return fmt.Sprintf("%s-%s", PROGNAME, sinkHost)
+	}
 }
