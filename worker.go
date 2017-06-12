@@ -61,7 +61,7 @@ type Header struct {
 	Version        string `json:"http_version,omitempty"`
 	User_Agent     string `json:"http_user_agent,omitempty"`
 	Content_Length string `json:"http_content_length,omitempty"`
-	Host           string `json:"dest_name,omitempty"`
+	Host           string `json:"dst_name,omitempty"`
 	Referer        string `json:"http_referer,omitempty"`
 }
 
