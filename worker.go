@@ -115,7 +115,9 @@ func (w *Worker) Work() {
 					AppLogger(errors.New(fmt.Sprintf("Error getting socket endpoint: %s", err.Error())))
 
 					err = work.Conn.Close()
-					AppLogger(err)
+					if *LogClientErrors == true {
+						AppLogger(err)
+					}
 
 					break
 				}
@@ -132,6 +134,7 @@ func (w *Worker) Work() {
 
 					req_log.ReqError = true
 					req_log.ErrorMsg = err.Error()
+
 					jsonLog, err := ToJSON(req_log)
 					if err != nil {
 						AppLogger(err)
@@ -150,7 +153,7 @@ func (w *Worker) Work() {
 						AppLogger(err)
 					}
 				} else {
-					var err error
+
 					if work.App == "http" {
 						err = parseConnHTTP(work.Buffer, work.BufferSize, &req_log)
 					} else {
@@ -158,7 +161,10 @@ func (w *Worker) Work() {
 					}
 
 					if err != nil {
-						AppLogger(err)
+						if *LogClientErrors == true {
+							AppLogger(err)
+						}
+
 						jsonLog, err := ToJSON(req_log)
 						if err != nil {
 							AppLogger(err)
@@ -193,7 +199,7 @@ func (w *Worker) Work() {
 						// Build the reponse using the template
 						tmplBytes, err := fillTemplateHTTP(&req_log)
 						if err != nil {
-							AppLogger(err)
+							AppLogger(errors.New(fmt.Sprintf("Unable to fill template: %s", err.Error())))
 
 							err = work.Conn.Close()
 							if *LogClientErrors == true {
@@ -212,7 +218,7 @@ func (w *Worker) Work() {
 
 						if err != nil {
 							if *LogClientErrors == true {
-								AppLogger(err)
+								AppLogger(errors.New(fmt.Sprintf("Unable to write to socket: %s", err.Error())))
 							}
 
 							err = work.Conn.Close()
@@ -252,7 +258,13 @@ func (w *Worker) Read() {
 				read.Buffer = make([]byte, 4096)
 
 				read.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
-				read.BufferSize, read.Err = read.Conn.Read(read.Buffer)
+				var err error
+				read.BufferSize, err = read.Conn.Read(read.Buffer)
+
+				if err != nil {
+					err = errors.New(fmt.Sprintf("Unable to read from socket: %s", err.Error()))
+				}
+				read.Err = err
 
 				// Now that we've tried to read, queue the rest of the work
 				QueueWork(read)
@@ -278,6 +290,11 @@ func (w *Worker) Stop() {
 
 func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 
+	if bufSize == 0 {
+		req_log.ReqError = true
+		req_log.ErrorMsg = "Got empty request"
+		return errors.New(req_log.ErrorMsg)
+	}
 
 	// This lets us use ReadLine() to get one line at a time
 	bufreader := bufio.NewReader(bytes.NewReader(buf[:bufSize]))
@@ -308,8 +325,8 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 		}
 	} else {
 		req_log.ReqError = true
-		req_log.ErrorMsg = err.Error()
-		return err
+		req_log.ErrorMsg = fmt.Sprintf("Failed to read first line: %s", err.Error())
+		return errors.New(req_log.ErrorMsg)
 	}
 
 	// Read any (optional) headers until first blank line indicating the end of the headers
@@ -317,8 +334,8 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 		bufline, lineprefix, err := bufreader.ReadLine()
 		if err != nil {
 			req_log.ReqError = true
-			req_log.ErrorMsg = err.Error()
-			return err
+			req_log.ErrorMsg = fmt.Sprintf("Failed to read line: %s", err.Error())
+			return errors.New(req_log.ErrorMsg)
 		}
 		if lineprefix == true {
 			req_log.ReqError = true
@@ -409,7 +426,7 @@ func ToJSON(data interface{}) ([]byte, error) {
 	jsonBytes, err := json.Marshal(data)
 
 	if err != nil {
-		return nil, err
+		return nil, errors.New(fmt.Sprintf("JSON conversion failed: %s", err.Error()))
 	}
 
 	return append(jsonBytes, "\n"...), nil

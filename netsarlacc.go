@@ -73,7 +73,7 @@ var (
 	LogChanLen        = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
 	ReadChanLen       = flag.Int("reader-queue-len", 32, "Maximum number of queued connections to read from")
 	WorkChanLen       = flag.Int("worker-queue-len", 32, "Maximum number of queued read connections to work on")
-	ClientReadTimeout = flag.Int("client-read-timeout", 300, "Number of milliseconds before giving up trying to read client request")
+	ClientReadTimeout = flag.Int("client-read-timeout", 500, "Number of milliseconds before giving up trying to read client request")
 	UseLocaltime      = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
 	Readerstopchan = make(chan bool, 1)
