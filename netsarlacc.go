@@ -76,7 +76,7 @@ var (
 	FlpathTLSCert    = flag.String("tls-cert", "server.pem", "Path to the TLS certificate")
 	FlpathTLSKey     = flag.String("tls-key", "server.key", "Path to the TLS certificate key")
 	FlpathLogDir     = flag.String("log-dir", "/var/log", "Path to the directory to store logs")
-	FlpathHTTPTemp   = flag.String("http-template", "template/csirtResponse.tmpl", "Path to the HTTP response template")
+	FlpathHTTPTemp   = flag.String("http-template", "template/HTTPResponse.tmpl", "Path to the HTTP response template")
 	FlpathPIDFile    = flag.String("pid-file", "netsarlacc.pid", "Path to the daemonization pid file")
 	// These get filled out by resolving paths from flags
 	pathConfigFile = "" // Allowed to be blank
