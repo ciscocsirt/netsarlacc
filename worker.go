@@ -34,12 +34,13 @@ var (
 // NewWorker creates, and returns a new Worker object. Its only argument
 // is a channel that the worker can add itself to whenever it is done its
 // work
-func NewWorker(workerQueue chan chan ConnInfo) Worker {
+func NewWorker(workQueue chan ConnInfo, stoppedchan chan bool) Worker {
 	//Creating the worker
 	worker := Worker{
-		WorkQueue:   make(chan ConnInfo),
-		WorkerQueue: workerQueue,
-		QuitChan:    make(chan bool)}
+		WorkQueue:   workQueue,
+		StoppedChan: stoppedchan,
+		QuitChan:    make(chan bool),
+	}
 
 	return worker
 }
@@ -49,7 +50,7 @@ func NewWorker(workerQueue chan chan ConnInfo) Worker {
 // a ReadWorker
 type Worker struct {
 	WorkQueue   chan ConnInfo
-	WorkerQueue chan chan ConnInfo
+	StoppedChan chan bool
 	QuitChan    chan bool
 }
 
@@ -90,7 +91,6 @@ func (w *Worker) Work() {
 	go func() {
 		for {
 			// Add ourselves into the worker queue.
-			w.WorkerQueue <- w.WorkQueue
 			select {
 			case work := <-w.WorkQueue:
 				// This is where we're going to store everything we log about this connection
@@ -127,13 +127,12 @@ func (w *Worker) Work() {
 				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(work.Buffer[:work.BufferSize])}
 
 				if work.Err != nil {
-					err = errors.New(fmt.Sprintf("Error reading on socket: %s", work.Err.Error()))
 					if *LogClientErrors == true {
-						AppLogger(err)
+						AppLogger(work.Err)
 					}
 
 					req_log.ReqError = true
-					req_log.ErrorMsg = err.Error()
+					req_log.ErrorMsg = work.Err.Error()
 
 					jsonLog, err := ToJSON(req_log)
 					if err != nil {
@@ -237,7 +236,7 @@ func (w *Worker) Work() {
 
 			case <-w.QuitChan:
 				// We have been asked to stop.
-				Workerstopchan <- true
+				w.StoppedChan <- true
 				// fmt.Fprintln(os.Stderr, "worker stopped")
 				return
 			}
@@ -250,7 +249,6 @@ func (w *Worker) Read() {
 	go func() {
 		for {
 			// Add ourselves into the reader queue.
-			w.WorkerQueue <- w.WorkQueue
 			select {
 			case read := <-w.WorkQueue:
 
@@ -271,7 +269,7 @@ func (w *Worker) Read() {
 
 			case <-w.QuitChan:
 				// We have been asked to stop.
-				Readerstopchan <- true
+				w.StoppedChan <- true
 				// fmt.Fprintln(os.Stderr, "worker stopped")
 				return
 			}

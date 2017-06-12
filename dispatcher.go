@@ -1,12 +1,17 @@
 package main
 
+import (
+	"time"
+	"errors"
+)
+
 var (
 	WorkQueue   chan ConnInfo
-	WorkerQueue chan chan ConnInfo
+	Workerstopchan = make(chan bool, 1)
 	WorkerSlice = make([]Worker, 0)
 
 	ReadQueue   chan ConnInfo
-	ReaderQueue chan chan ConnInfo
+	Readerstopchan = make(chan bool, 1)
 	ReaderSlice = make([]Worker, 0)
 )
 
@@ -24,79 +29,75 @@ func QueueWork(Ci ConnInfo) {
 }
 
 
-func StartWorkers(nworkers int) {
+func StartWorkers(nworkers int, chanlen int) {
 	// Init the channels
-	WorkQueue = make(chan ConnInfo, *WorkChanLen)
-	WorkerQueue = make(chan chan ConnInfo, nworkers)
+	WorkQueue = make(chan ConnInfo, chanlen)
 
 	// Now, create all of our workers.
 	for i := 0; i < nworkers; i++ {
 		//fmt.Println("Starting worker", i+1)
-		worker := NewWorker(WorkerQueue)
+		worker := NewWorker(WorkQueue, Workerstopchan)
 		worker.Work()
 
 		// Store this worker so we can stop it later
 		WorkerSlice = append(WorkerSlice, worker)
 	}
-
-	// This goroutine takes work from the main WorkQueue
-	// and hands hands it to one of the worker's worqueues
-	go func() {
-		for {
-			select {
-			case work := <- WorkQueue:             // Get work off of the main workqueue
-				select {
-				case worker := <- WorkerQueue: // Get a worker's queue from the WorkeQueue
-					worker <- work         // Add the work to the worker's queue
-				}
-			}
-		}
-	}()
  }
 
 
-func StartReaders(nreaders int) {
+func StartReaders(nreaders int, chanlen int) {
 	// Init the channels
-	ReadQueue = make(chan ConnInfo, *ReadChanLen)
-	ReaderQueue = make(chan chan ConnInfo, nreaders)
+	ReadQueue = make(chan ConnInfo, chanlen)
 
 	// Now, create all of our readers
 	for i := 0; i < nreaders; i++ {
 
-		reader := NewWorker(ReaderQueue)
+		reader := NewWorker(ReadQueue, Readerstopchan)
 		reader.Read()
 
 		// Store this worker so we can stop it later
 		ReaderSlice = append(ReaderSlice, reader)
 	}
-
-	// This goroutine takes work from the main ReadQueue
-	// and hands hands it to one of the reader's readqueues
-	go func() {
-		for {
-			select {
-			case read := <- ReadQueue:
-				select {
-				case reader := <- ReaderQueue:
-					reader <- read
-				}
-			}
-		}
-	}()
 }
 
 
-func StopWorkers() {
+func StopWorkers(nwriters int) error {
 
 	for _, w := range WorkerSlice {
 		w.Stop()
 	}
+
+	// As workers stop, they will tell us that.  We must wait for them
+	// so that we can close the logging after the pending work is done
+	for wstopped := 0; wstopped < nwriters; {
+		select {
+		case <-Workerstopchan:
+			wstopped++
+		case <-time.After(time.Second * 5):
+			return errors.New("Timed out waiting for all workers to stop!")
+		}
+	}
+
+	return nil
 }
 
 
-func StopReaders() {
+func StopReaders(nreaders int) error {
 
 	for _, w := range ReaderSlice {
 		w.Stop()
 	}
+
+	// As readers stop, they will tell us that.  We must wait for them
+	// so that we can close the logging after the pending work is done
+	for rstopped := 0; rstopped < nreaders; {
+		select {
+		case <-Readerstopchan:
+			rstopped++
+		case <-time.After(time.Second * 5):
+			return errors.New("Timed out waiting for all readers to stop!")
+		}
+	}
+
+	return nil
 }

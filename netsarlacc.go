@@ -76,8 +76,6 @@ var (
 	ClientReadTimeout = flag.Int("client-read-timeout", 500, "Number of milliseconds before giving up trying to read client request")
 	UseLocaltime      = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
-	Readerstopchan = make(chan bool, 1)
-	Workerstopchan = make(chan bool, 1)
 	Logstopchan = make(chan bool, 1)
 	Daemonized = false
 	PidFile *os.File
@@ -198,9 +196,9 @@ func main() {
         // Start the dispatcher that feeds workers
 	// work as well as starting all the workers
 	AppLogger(errors.New(fmt.Sprintf("Starting %d readers", *NReaders)))
-        StartReaders(*NReaders)
+        StartReaders(*NReaders, *ReadChanLen)
 	AppLogger(errors.New(fmt.Sprintf("Starting %d workers", *NWorkers)))
-	StartWorkers(*NWorkers)
+	StartWorkers(*NWorkers, *WorkChanLen)
 
         // Start the log channel
         go writeLogger(*LogChanLen)
@@ -370,39 +368,17 @@ func main() {
 
 func AttemptShutdown() {
 
-	// The goal here is to try to stop the workers
+	// The goal here is to try to stop the readers / workers
 	// and close out the log file so that data isn't lost
 	// and the log file is left consistent
 
 	AppLogger(errors.New("Stopping readers"))
-	StopReaders()
-
-	// As workers stop, they will tell us that.  We must wait for them
-	// so that we can close the logging after the pending work is done
-	for rstopped := 0; rstopped < *NReaders; {
-		select {
-		case <-Readerstopchan:
-			rstopped++
-		case <-time.After(time.Second * 5):
-			AppLogger(errors.New("Timed out waiting for all readers to stop!"))
-			rstopped = *NReaders
-		}
-	}
+	err := StopReaders(*NReaders)
+	AppLogger(err)
 
 	AppLogger(errors.New("Stopping workers"))
-	StopWorkers()
-
-	// As workers stop, they will tell us that.  We must wait for them
-	// so that we can close the logging after the pending work is done
-	for wstopped := 0; wstopped < *NWorkers; {
-		select {
-		case <-Workerstopchan:
-			wstopped++
-		case <-time.After(time.Second * 5):
-			AppLogger(errors.New("Timed out waiting for all workers to stop!"))
-			wstopped = *NWorkers
-		}
-	}
+	err = StopWorkers(*NWorkers)
+	AppLogger(err)
 
 	// Close the Logchan which will allow the remaining
 	// logs to get written to the logfile before the logging
@@ -420,7 +396,7 @@ func AttemptShutdown() {
 
 	if Daemonized == true {
 		AppLogger(errors.New("Releasing lock on PID file"))
-		err := syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
+		err = syscall.Flock(int(PidFile.Fd()), syscall.LOCK_UN)
 
 		if err != nil {
 			AppLogger(errors.New(fmt.Sprintf("Unable to release lock on pid file: %s", err.Error())))
