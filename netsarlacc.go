@@ -76,7 +76,6 @@ var (
 	ClientReadTimeout = flag.Int("client-read-timeout", 500, "Number of milliseconds before giving up trying to read client request")
 	UseLocaltime      = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
-	Logstopchan = make(chan bool, 1)
 	Daemonized = false
 	PidFile *os.File
 )
@@ -380,19 +379,9 @@ func AttemptShutdown() {
 	err = StopWorkers(*NWorkers)
 	AppLogger(err)
 
-	// Close the Logchan which will allow the remaining
-	// logs to get written to the logfile before the logging
-	// goroutine finally closes the file and tells us it finished
 	AppLogger(errors.New("Flushing logs and closing the log file"))
-	close(Logchan)
-
-	select {
-	case <-Logstopchan:
-		break
-	case <-time.After(time.Second * 5):
-		AppLogger(errors.New("Timed out waiting for log flushing and closing!"))
-		break
-	}
+	err = StopLogger()
+	AppLogger(err)
 
 	if Daemonized == true {
 		AppLogger(errors.New("Releasing lock on PID file"))

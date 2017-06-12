@@ -15,6 +15,7 @@ import (
 
 var (
 	Logchan chan []byte
+	Logstopchan = make(chan bool, 1)
 )
 
 
@@ -191,4 +192,21 @@ func writeLogger(logbuflen int) {
 
 	// Notify the main routine that we've finished
 	Logstopchan <- true
+}
+
+
+func StopLogger() error {
+
+	// This will end the for ... range Logchan 
+	close(Logchan)
+
+	// Now wait to be told that everything stopped
+	select {
+	case <-Logstopchan:
+		break
+	case <-time.After(time.Second * 5):
+		return errors.New("Timed out waiting for log flushing and closing!")
+	}
+
+	return nil
 }
