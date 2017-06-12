@@ -1,11 +1,24 @@
 {
-    "Daemonize"       : false,
-    "Workers"         : 4,
-    "WorkingDirectory": "/home/brenrigh/projects/github/netsarlacc",
-    "LogDirectory"    : ".",
-    "LogPrefix"       : "sinkhole",
-    "ListenList"      : [{"Host":"0.0.0.0", "Port":"8080", "Proto":"tcp", "App":"http", "TLS":false},
-			 {"Host":"0.0.0.0", "Port":"8443", "Proto":"tcp", "App":"http", "TLS":true},
-			 {"Host":"0.0.0.0", "Port":"8444", "Proto":"tcp", "App":"http", "TLS":true, "TLSCert":"server.pem", "TLSKey":"server.key"}
-			]
+    "WorkingDirectory"   : "/home/brenrigh/projects/github/netsarlacc",
+    "Daemonize"          : false,
+    "DaemonEnvVar"       : "_NETSARLACC_DAEMON",
+    "PIDFile"            : "netsarlacc.pid",
+    "Workers"            : 4,
+    "Readers"            : 512,
+    "ReaderQueueLen"     : 32,
+    "WorkerQueueLen"     : 32,
+    "LogDirectory"       : ".",
+    "LogPrefix"          : "sinkhole",
+    "TLSCert"            : "server.pem",
+    "TLSKey"             : "server.key",
+    "ListenList"         : [{"Host":"0.0.0.0", "Port":"8080", "Proto":"tcp", "App":"http", "TLS":false},
+		  	    {"Host":"0.0.0.0", "Port":"8443", "Proto":"tcp", "App":"http", "TLS":true},
+			    {"Host":"0.0.0.0", "Port":"8444", "Proto":"tcp", "App":"http", "TLS":true, "TLSCert":"server.pem", "TLSKey":"server.key"}
+			   ],
+    "UseLocalTime"       : false,
+    "LogClientErrors"    : false,
+    "ClientReadTimeout"  : 500,
+    "ClientWriteTimeout" : 500,
+    "LogBufferLen"       : 4096,
+    "HTTPTemplate"       : "template/HTTPResponse.tmpl"
 }

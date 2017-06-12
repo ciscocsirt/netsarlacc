@@ -120,12 +120,6 @@ type Config struct {
 
 func main() {
 
-	// This seems to be needed for GCCGO because for some
-	// reason it uses 1 maximum thread at start (at least on my system)
-	AppLogger(errors.New(fmt.Sprintf("Started with %d max threads", runtime.GOMAXPROCS(0))))
-	runtime.GOMAXPROCS(runtime.NumCPU())
-	AppLogger(errors.New(fmt.Sprintf("Now running with with %d max threads", runtime.GOMAXPROCS(0))))
-
 	// Setup the stop channel signal handler
 	signal.Notify(Stopchan, os.Interrupt, syscall.SIGTERM)
 
@@ -183,6 +177,12 @@ func main() {
 
 	// Announce that we're starting
 	AppLogger(errors.New(fmt.Sprintf("Starting sinkhole instance %s", *SinkholeInstance)))
+
+	// This seems to be needed for GCCGO because for some
+	// reason it uses 1 maximum thread at start (at least on my system)
+	AppLogger(errors.New(fmt.Sprintf("Started with %d max threads", runtime.GOMAXPROCS(0))))
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	AppLogger(errors.New(fmt.Sprintf("Now running with with %d max threads", runtime.GOMAXPROCS(0))))
 
 	// Check if we should daemonize
 	if *Daemonize == true {
