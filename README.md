@@ -9,7 +9,7 @@ netsarlacc is a high performance enterprise HTTP sinkhole designed to be used by
  - Allow for a configurable custom response to help users understand that the request was blocked
 
 #### How is netsarlacc intended to be used?
-netsarlacc is meant to work in conjuction with existing blocking / captive portal / quarantining / redirecting technologies like DNS RPZ.  In a typical deployment, netsarlacc is the target IP / CNAME provided to clients that look domain names being blocked by your DNS security infrastructure such as DNS RPZ or Cisco's Umbrella.  The logs produced by netsarlacc go beyond the logs available from a typical webserver and were specifically designed with incident response and network monitoring in mind.
+netsarlacc is meant to work in conjunction with existing blocking / captive portal / quarantining / redirecting technologies like DNS RPZ.  In a typical deployment, netsarlacc is the target IP / CNAME provided to clients that look domain names being blocked by your DNS security infrastructure such as DNS RPZ or Cisco's Umbrella.  The logs produced by netsarlacc go beyond the logs available from a typical webserver and were specifically designed with incident response and network monitoring in mind.
 
 #### What's next? How can I help?
 At this time, netsarlacc was primarily built for HTTP but we plan on adding support for additional protocols like SMTP soon.  We could use:
@@ -27,9 +27,15 @@ netsarlacc requires:
 - Your own TLS certificate / keypair if you want to use TLS
 
 
-Configuring and using netsarlacc
+Building, configuring, and using netsarlacc
 ===================
-Once setup, tuned, and tested, netsarlacc is meant to run as a Unix daemon out of an init script or as a service.
+netsarlacc can be built with go or gccgo.  Testing of Go 1.8 vs GCC 5.4.0 shows Go is significantly faster.  This is likely due to gccgo using and older version of the go laguage specification.
+
+You can build netsarlac with the provided makefile:
+```
+# make
+go build netsarlacc.go dispatcher.go logger.go worker.go
+```
 
 **For initial testing a small configuration file like the following is a good start:**
 ```
@@ -65,6 +71,8 @@ To test the performance of netsarlacc, ApacheBench is one of the easier tools to
 $ ab -l -q -n 200000 -c 80 http://127.0.0.1:8080/netsarlacc_test
 ```
 
+Once setup, tuned, and tested, netsarlacc is meant to run as a Unix daemon out of an init script or as a service.
+
 
 ### Log format
 netsarlacc logs use JSON which is easily parsed by many tools. Logs entries are written as requests come in and the log files are rotated every 10 minutes.
@@ -98,3 +106,26 @@ Which will look something like:
 }
 ```
 
+### Performance tuning
+Benchmarking and profiling netsarlacc shows CPU usage roughly breaks down like so:
+
+- 25% calling accept() on the listening sockets (almost entirely kernel time)
+- 25% filling out the response template
+- 25% calling write() on each socket to send the template (almost entirely kernel time)
+- 25% everything else
+
+Testing shows that if there are too few workers the bottleneck is in filling out the templates and if there are too many workers, they stave the other tasks of CPU time.  The ideal number of workers will vary from machine to machine but the best performance seems to come from matching up the number of workers with the number of physical CPU cores.  If you have a hyperthreaded machine (SMT) this will be half the number of CPUs your operating system sees.  For maximum performance the number of readers should be between 1x and 2x the number of workers.  In a real-world deployment though, you want many more readers than workers (around 64x) to handle abusive / broken clients that hold onto sockets instead of making a valid HTTP request.  If you don't have enough readers, a single machine performing a Slowloris-style attack can tie up all of the readers.
+
+Because so much time is spent in the kernel, it's important that the kernel is configured to balance TCP connections across multiple CPUs.  Your Ethernet card may have multiple receive queues and you can try to distribute incoming connections across those receive queues and then assign each queue to a specific CPU.  An easier alternative is to just tell each receive queues that they can use all the CPUs.
+
+Suppose your Ethernet card is `eth1` then you can run:
+```
+# find /sys/class/net/eth1/queues/ | egrep rps_cpus | while read LINE; do echo ffff > $LINE; done
+```
+
+Occasionally Go must run through a garbage collection sweep which can cause short pauses in calling accept() for new connections.  At very high connection rates it is possible to fill up the operating system's outstanding connection queue and additional connections will get an RST back from the operating system until netsarlacc can catch up.  This will likely only come up during benchmarking or at maximum load but if tuning is needed, check out the documentation for:
+
+```
+/proc/sys/net/core/netdev_max_backlog
+/proc/sys/net/ipv4/tcp_max_syn_backlog
+```
