@@ -1,7 +1,7 @@
 netsarlacc
 ===================
 
-netsarlacc is a high performance enterprise HTTP sinkhole designed to be used by corporate SOC or IR teams.  netsarlacc was designed with several purpose-specific goals in mind:
+netsarlacc is a high performance enterprise HTTP (and SMTP) sinkhole designed to be used by corporate SOC or IR teams.  netsarlacc was designed with several purpose-specific goals in mind:
 
  - Be very fast even under very high load
  - Robust against abuse from malware or broken scripts
@@ -12,7 +12,7 @@ netsarlacc is a high performance enterprise HTTP sinkhole designed to be used by
 netsarlacc is meant to work in conjunction with existing blocking / captive portal / quarantining / redirecting technologies like DNS RPZ.  In a typical deployment, netsarlacc is the target IP / CNAME provided to clients that look domain names being blocked by your DNS security infrastructure such as DNS RPZ or Cisco's Umbrella.  The logs produced by netsarlacc go beyond the logs available from a typical webserver and were specifically designed with incident response and network monitoring in mind.
 
 #### What's next? How can I help?
-At this time, netsarlacc was primarily built for HTTP but we plan on adding support for additional protocols like SMTP soon.  We could use:
+At this time, netsarlacc was primarily built for HTTP but basic support for non-interactive SMTP is available too.  Later more interactivity for SMTP and other protocols may be added.
 
 - Feedback from the community about the log format and choice of fields to log
 - init scripts for various distributions to aid in deployment

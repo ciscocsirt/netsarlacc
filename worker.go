@@ -17,6 +17,7 @@ import (
 
 var (
 	HTTPtmpl *template.Template = nil // Allow caching of the HTTP template
+	SMTPtmpl *template.Template = nil // Allow caching of the SMTP template
 )
 
 // Compile the regular expressions once
@@ -55,7 +56,7 @@ type Worker struct {
 }
 
 type Header struct {
-	BytesClient    string `json:"bytes_client"`
+	BytesClient    string `json:"bytes_client,omitempt"y`
 	Method         string `json:"http_method,omitempty"`
 	Path           string `json:"url_path,omitempty"`
 	Version        string `json:"http_version,omitempty"`
@@ -66,7 +67,7 @@ type Header struct {
 }
 
 type EncodedConn struct {
-	Encode string `json:"raw_data"`
+	Encode string `json:"raw_data,omitempty"`
 }
 
 type LoggedRequest struct {
@@ -122,9 +123,11 @@ func (w *Worker) Work() {
 					break
 				}
 
-				req_log.Header.BytesClient = fmt.Sprintf("%d", work.BufferSize)
+				if work.App == "http" {
+					req_log.Header.BytesClient = fmt.Sprintf("%d", work.BufferSize)
 
-				req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(work.Buffer[:work.BufferSize])}
+					req_log.EncodedConn = EncodedConn{Encode: hex.EncodeToString(work.Buffer[:work.BufferSize])}
+				}
 
 				if work.Err != nil {
 					if *LogClientErrors == true {
@@ -148,10 +151,13 @@ func (w *Worker) Work() {
 					queueLog(jsonLog)
 				} else {
 
-					if work.App == "http" {
+					switch work.App {
+					case "http":
 						err = parseConnHTTP(work.Buffer, work.BufferSize, &req_log)
-					} else {
-						err = errors.New("Only http can be parsed at this time.")
+					case "smtp":
+						err = nil
+					default:
+						err = errors.New("Only HTTP and SMTP are supported at this time.")
 					}
 
 					if err != nil {
@@ -187,7 +193,17 @@ func (w *Worker) Work() {
 						queueLog(jsonLog)
 
 						// Build the reponse using the template
-						tmplBytes, err := fillTemplateHTTP(&req_log)
+						var tmplBytes []byte
+
+						switch work.App {
+						case "http":
+							tmplBytes, err = fillTemplateHTTP(&req_log)
+						case "smtp":
+							tmplBytes, err = fillTemplateSMTP(&req_log)
+						default:
+							err = errors.New("Unsupported protocol for template response")
+						}
+
 						if err != nil {
 							AppLogger(errors.New(fmt.Sprintf("Unable to fill template: %s", err.Error())))
 
@@ -214,13 +230,20 @@ func (w *Worker) Work() {
 							break
 						}
 
-						// Mash the entire HTTP header and the template bytes into one write.
-						// If this wasn't done in one write we'd need to turn off Nagle's algorithm
-						// with "func (c *TCPConn) SetNoDelay(noDelay bool) error" so that the OS
-						// doesn't do two seperate sends which is inefficient and may confuse
-						// some clients that expect to get at least some of the body
-						// at the same time they get the header
-						_, err = work.Conn.Write(append([]byte(fmt.Sprintf("%s 200 OK\r\nServer: %s\r\nContent-Type: text/html;\r\nConnection: close\r\nContent-Length: %d\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n", req_log.Header.Version, PROGNAME, len(tmplBytes))), tmplBytes...))
+						switch work.App {
+						case "http":
+							// Mash the entire HTTP header and the template bytes into one write.
+							// If this wasn't done in one write we'd need to turn off Nagle's algorithm
+							// with "func (c *TCPConn) SetNoDelay(noDelay bool) error" so that the OS
+							// doesn't do two seperate sends which is inefficient and may confuse
+							// some clients that expect to get at least some of the body
+							// at the same time they get the header
+							_, err = work.Conn.Write(append([]byte(fmt.Sprintf("%s 200 OK\r\nServer: %s\r\nContent-Type: text/html;\r\nConnection: close\r\nContent-Length: %d\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n", req_log.Header.Version, PROGNAME, len(tmplBytes))), tmplBytes...))
+						case "smtp":
+							_, err = work.Conn.Write(tmplBytes)
+						default:
+							err = errors.New("Unsupported protocol, no bytes to write!")
+						}
 
 						if err != nil {
 							if *LogClientErrors == true {
@@ -396,7 +419,7 @@ func fillTemplateHTTP(req_log *LoggedRequest) ([]byte, error) {
 	if HTTPtmpl == nil {
 		templateData, err := ioutil.ReadFile(pathHTTPTemp)
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("Could not read template file: %s", err.Error()))
+			return nil, errors.New(fmt.Sprintf("Could not read HTTP template file: %s", err.Error()))
 		}
 
 		funcMap := template.FuncMap{
@@ -415,18 +438,58 @@ func fillTemplateHTTP(req_log *LoggedRequest) ([]byte, error) {
 		// This will cache the template into the HTTPtmpl var
 		HTTPtmpl, err = template.New("HTTPresponse").Funcs(funcMap).Parse(string(templateData[:]))
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("Could not instantiate new template: %s", err.Error()))
+			return nil, errors.New(fmt.Sprintf("Could not instantiate new HTTP template: %s", err.Error()))
 		}
 	}
 
 	var tmplFilled bytes.Buffer
 	err := HTTPtmpl.Execute(&tmplFilled, req_log)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Could not execute template fill: %s", err.Error()))
+		return nil, errors.New(fmt.Sprintf("Could not execute HTTP template fill: %s", err.Error()))
 	}
 
 	return tmplFilled.Bytes(), nil
 }
+
+
+func fillTemplateSMTP(req_log *LoggedRequest) ([]byte, error) {
+
+	// If we haven't cached the template yet, do so
+	if SMTPtmpl == nil {
+		templateData, err := ioutil.ReadFile(pathSMTPTemp)
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Could not read SMTP template file: %s", err.Error()))
+		}
+
+		funcMap := template.FuncMap{
+			"Date": func(s string) string {
+				flds := strings.Fields(s)
+				return fmt.Sprintf("%s", flds[0])
+
+			},
+			"Time": func(s string) string {
+				flds := strings.Fields(s)
+				return fmt.Sprintf("%s", flds[1])
+
+			},
+		}
+
+		// This will cache the template into the SMTPtmpl var
+		SMTPtmpl, err = template.New("SMTPresponse").Funcs(funcMap).Parse(string(templateData[:]))
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Could not instantiate new SMTP template: %s", err.Error()))
+		}
+	}
+
+	var tmplFilled bytes.Buffer
+	err := SMTPtmpl.Execute(&tmplFilled, req_log)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Could not execute SMTP template fill: %s", err.Error()))
+	}
+
+	return tmplFilled.Bytes(), nil
+}
+
 
 // ToJSON converts a struct to a JSON string
 func ToJSON(data interface{}) ([]byte, error) {

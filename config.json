@@ -11,8 +11,9 @@
     "LogPrefix"          : "sinkhole",
     "TLSCert"            : "server.pem",
     "TLSKey"             : "server.key",
-    "ListenList"         : [{"Host":"0.0.0.0", "Port":"8080", "Proto":"tcp", "App":"http", "TLS":false},
-		  	    {"Host":"0.0.0.0", "Port":"8443", "Proto":"tcp", "App":"http", "TLS":true},
+    "ListenList"         : [{"Host":"0.0.0.0", "Port":"2525", "Proto":"tcp", "App":"smtp", "TLS":false},
+			    {"Host":"0.0.0.0", "Port":"8080", "Proto":"tcp", "App":"http", "TLS":false},
+			    {"Host":"0.0.0.0", "Port":"8443", "Proto":"tcp", "App":"http", "TLS":true},
 			    {"Host":"0.0.0.0", "Port":"8444", "Proto":"tcp", "App":"http", "TLS":true, "TLSCert":"server.pem", "TLSKey":"server.key"}
 			   ],
     "UseLocalTime"       : false,
@@ -20,5 +21,6 @@
     "ClientReadTimeout"  : 500,
     "ClientWriteTimeout" : 500,
     "LogBufferLen"       : 4096,
-    "HTTPTemplate"       : "template/HTTPResponse.tmpl"
+    "HTTPTemplate"       : "template/HTTPResponse.tmpl",
+    "SMTPTemplate"       : "template/SMTPResponse.tmpl"
 }

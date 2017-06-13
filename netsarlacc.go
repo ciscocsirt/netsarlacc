@@ -47,6 +47,7 @@ type ConnInfo struct {
 
 var (
 	ListenList = []ListenInfo{
+		ListenInfo{Host: "0.0.0.0", Port: "2525", Proto: "tcp", App: "smtp", TLS: false},
 		ListenInfo{Host: "0.0.0.0", Port: "8000", Proto: "tcp", App: "http", TLS: false},
 		ListenInfo{Host: "0.0.0.0", Port: "8443", Proto: "tcp", App: "http", TLS: true},
 	}
@@ -77,6 +78,7 @@ var (
 	FlpathTLSKey     = flag.String("tls-key", "server.key", "Path to the TLS certificate key")
 	FlpathLogDir     = flag.String("log-dir", "/var/log", "Path to the directory to store logs")
 	FlpathHTTPTemp   = flag.String("http-template", "template/HTTPResponse.tmpl", "Path to the HTTP response template")
+	FlpathSMTPTemp   = flag.String("smtp-template", "template/SMTPResponse.tmpl", "Path to the SMTP response template")
 	FlpathPIDFile    = flag.String("pid-file", "netsarlacc.pid", "Path to the daemonization pid file")
 	// These get filled out by resolving paths from flags
 	pathConfigFile = "" // Allowed to be blank
@@ -85,6 +87,7 @@ var (
 	pathTLSKey     string
 	pathLogDir     string
 	pathHTTPTemp   string
+	pathSMTPTemp   string
 	pathPIDFile    string
 )
 
@@ -111,6 +114,7 @@ type Config struct {
 	WorkingDirectory   string
 	LogDirectory       string
 	HTTPTemplate       string
+	SMTPTemplate       string
 	PIDFile            string
 	TLSCert            string
 	TLSKey             string
@@ -335,7 +339,14 @@ func main() {
 					Ci.Conn = connection
 					Ci.Time = getTime()
 
-					QueueRead(Ci)
+					switch Ci.App {
+					case "http":
+						QueueRead(Ci)
+					case "smtp":
+						QueueWork(Ci) // skip the read
+					default:
+						QueueRead(Ci) // Uh we'll just assume read?
+					}
 				}
 			}
 		}()
@@ -479,6 +490,11 @@ func ResolvePaths() error {
 		return errors.New(fmt.Sprintf("Unable to resolve http-template path: %s", err.Error()))
 	}
 
+	pathSMTPTemp, err = Fullpath(*FlpathSMTPTemp)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Unable to resolve smtp-template path: %s", err.Error()))
+	}
+
 	pathPIDFile, err = Fullpath(*FlpathPIDFile)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Unable to resolve pid-file path: %s", err.Error()))
@@ -584,6 +600,9 @@ func LoadConfig(filename string) error {
 	}
 	if conf.HTTPTemplate != "" {
 		FlpathHTTPTemp   = &(conf.HTTPTemplate)
+	}
+	if conf.SMTPTemplate != "" {
+		FlpathSMTPTemp   = &(conf.SMTPTemplate)
 	}
 	if conf.PIDFile != "" {
 		FlpathPIDFile    = &(conf.PIDFile)
