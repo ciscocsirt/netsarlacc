@@ -29,9 +29,9 @@ netsarlacc requires:
 
 Building, configuring, and using netsarlacc
 ===================
-netsarlacc can be built with go or gccgo.  Testing of Go 1.8 vs GCC 5.4.0 shows Go is significantly faster.  This is likely due to gccgo using and older version of the go laguage specification.
+netsarlacc can be built with go or gccgo.  Testing of Go 1.8 vs GCC 5.4.0 shows Go is significantly faster.  This is likely due to gccgo using and older version of the go language specification.
 
-You can build netsarlac with the provided makefile:
+You can build netsarlacc with the provided makefile:
 ```
 # make
 go build netsarlacc.go dispatcher.go logger.go worker.go
