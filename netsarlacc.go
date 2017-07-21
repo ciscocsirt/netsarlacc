@@ -5,7 +5,8 @@ import (
         "fmt"
         "os"
 	"os/signal"
-	//"os/user"
+	"os/user"
+	"strconv"
 	"syscall"
 	"time"
         "net"
@@ -830,9 +831,38 @@ func DaemonizeProc() (*int, error) {
 		// Ask new process to detact from tty
 		attrs.Sys.Noctty = false
 
-		// set user / group
-		attrs.Sys.Credential.Uid = 65534
-		attrs.Sys.Credential.Gid = 65533
+		// Set new process used and group uid / gid
+		var userInfo *user.User
+		if *DUser != "" {
+			// Set to new user
+			userInfo, err = user.Lookup(*DUser)
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to lookup new daemon user info: %s", err.Error()))
+				return nil, err
+			}
+		} else {
+			// Set to current user
+			userInfo, err = user.Current()
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to lookup current daemon user info: %s", err.Error()))
+				return nil, err
+			}
+		}
+
+		uUid, err := strconv.ParseUint(userInfo.Uid, 10, 32)
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to parse Uid: %s", err.Error()))
+			return nil, err
+		}
+
+		uGid, err := strconv.ParseUint(userInfo.Gid, 10, 32)
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to parse Gid: %s", err.Error()))
+			return nil, err
+		}
+
+		attrs.Sys.Credential.Uid = uint32(uUid)
+		attrs.Sys.Credential.Gid = uint32(uGid)
 
 		// Try to start up the deamon process
 		pid, _, err := syscall.StartProcess(exe, os.Args, &attrs)
