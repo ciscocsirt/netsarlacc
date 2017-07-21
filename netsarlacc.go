@@ -5,6 +5,7 @@ import (
         "fmt"
         "os"
 	"os/signal"
+	//"os/user"
 	"syscall"
 	"time"
         "net"
@@ -56,6 +57,7 @@ var (
         SinkholeInstance   = flag.String("name", getInstanceName(), "The sinkhole instance name")
 	Daemonize          = flag.Bool("daemonize", false, "Daemonize the sinkhole")
 	DaemonEnvVar       = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
+	DUser              = flag.String("user", "", "Drop privileges to this user when daemonizing")
 	LogClientErrors    = flag.Bool("log-client-errors", false, "Report client-based errors to syslog / stderr")
 	LogBaseName        = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
 	LogChanLen         = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
@@ -101,6 +103,7 @@ var (
 type Config struct {
 	Daemonize          bool
 	DaemonEnvVar       string
+	DaemonUser         string
 	UseLocaltime       bool
 	LogClientErrors    bool
 	ClientReadTimeout  int
@@ -177,6 +180,11 @@ func main() {
 	if *ClientWriteTimeout < 1 {
 		AppLogger(errors.New("The client write timeout must be at least 1 millisecond"))
 		FatalAbort(false, -1)
+	}
+
+	// If a user was specified but we're not daemonizing it will be ignored
+	if ((*Daemonize == false) && (*DUser != "")) {
+		AppLogger(errors.New("The user parameter can only be used when daemonizing, ignoring!"))
 	}
 
 	// Announce that we're starting
@@ -589,6 +597,9 @@ func LoadConfig(filename string) error {
 	if conf.DaemonEnvVar != "" {
 		DaemonEnvVar     = &(conf.DaemonEnvVar)
 	}
+	if conf.DaemonUser != "" {
+		DUser     = &(conf.DaemonUser)
+	}
 	if conf.LogPrefix != "" {
 		LogBaseName      = &(conf.LogPrefix)
 	}
@@ -666,7 +677,7 @@ func DaemonizeProc() (*int, error) {
 		AppLogger(errors.New(fmt.Sprintf("Daemon got a PID of %d", pid)))
 
 		// Now open our PID file, get a lock, and write our PID to it
-		PidFile, err = os.OpenFile(pathPIDFile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile(pathPIDFile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0666)
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
 			return nil, err
@@ -733,7 +744,7 @@ func DaemonizeProc() (*int, error) {
 		var err error
 		// First we'll try to open and acquire a lock on the pid file
 		// to ensure there isn't a daemon already running
-		PidFile, err = os.OpenFile(pathPIDFile, os.O_RDONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile(pathPIDFile, os.O_RDONLY|os.O_CREATE, 0666) // 0666 so root and other user can read/write
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
 			return nil, err
@@ -774,14 +785,19 @@ func DaemonizeProc() (*int, error) {
 			return nil, err
 		}
 
-		// Get our exename and full path
-		exe, err := Fullpath(os.Args[0])
+		// Get our the current path to this executable
+		exe, err := filepath.Abs(os.Args[0])
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to get full path of exe: %s", err.Error()))
 			return nil, err
 		}
 
-		var attrs syscall.ProcAttr
+		var attrs syscall.ProcAttr       // The broad process attributes
+		var sysattrs syscall.SysProcAttr // The fine grained process starting attributes
+		var syscreds syscall.Credential  // The credentials for the new process
+
+		attrs.Sys = &sysattrs
+		attrs.Sys.Credential = &syscreds
 
 		// Start new process with cwd of /
 		attrs.Dir = "/"
@@ -807,6 +823,16 @@ func DaemonizeProc() (*int, error) {
 
 		// Copy our environment to the proc attributes
 		attrs.Env = os.Environ()
+
+		// Ask new process to setsid
+		attrs.Sys.Setsid = false
+
+		// Ask new process to detact from tty
+		attrs.Sys.Noctty = false
+
+		// set user / group
+		attrs.Sys.Credential.Uid = 65534
+		attrs.Sys.Credential.Gid = 65533
 
 		// Try to start up the deamon process
 		pid, _, err := syscall.StartProcess(exe, os.Args, &attrs)
