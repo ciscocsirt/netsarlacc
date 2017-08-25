@@ -64,6 +64,9 @@ type Header struct {
 	Content_Length string `json:"http_content_length,omitempty"`
 	Host           string `json:"dst_name,omitempty"`
 	Referer        string `json:"http_referer,omitempty"`
+	Via            string `json:"http_via,omitempty"`
+	Xff            string `json:"http_xff,omitempty"`
+	Forwarded      string `json:"http_forwarded,omitempty"`
 }
 
 type EncodedConn struct {
@@ -409,6 +412,15 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 	}
 	if val, ok := allHeaders["host"]; ok {
 		req_log.Header.Host = val
+	}
+	if val, ok := allHeaders["via"]; ok {
+		req_log.Header.Via = val
+	}
+	if val, ok := allHeaders["x-forwarded-for"]; ok {
+		req_log.Header.Xff = val
+	}
+	if val, ok := allHeaders["forwarded"]; ok {
+		req_log.Header.Forwarded = val
 	}
 
 	req_log.ReqError = false
