@@ -279,7 +279,7 @@ func (w *Worker) Read() {
 				var err error
 
 				// Make enough space to recieve client bytes
-				read.Buffer = make([]byte, 4096)
+				read.Buffer = make([]byte, 8192)
 
 				err = read.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
 				if err != nil {
@@ -333,46 +333,49 @@ func parseConnHTTP(buf []byte, bufSize int, req_log *LoggedRequest) error {
 	allHeaders := make(map[string]string)
 
 	// read first line of HTTP request
-	bufline, lineprefix, err := bufreader.ReadLine()
-	if err == nil {
-		if lineprefix == false {
-			// The first line came through intact
-			// Apply validating regex
-			matches := req_re.FindStringSubmatch(string(bufline))
-			if matches != nil {
-				req_log.Header.Method = string(matches[1])
-				req_log.Header.Path = string(matches[2])
-				req_log.Header.Version = string(matches[3])
-			} else {
-				req_log.ReqError = true
-				req_log.ErrorMsg = "Request header failed regex validation"
-				return errors.New(req_log.ErrorMsg)
-			}
-		} else {
+	var firstline []byte
+	for {
+		bufline, lineprefix, err := bufreader.ReadLine()
+		if err != nil {
 			req_log.ReqError = true
-			req_log.ErrorMsg = "First request line was truncated"
+			req_log.ErrorMsg = fmt.Sprintf("Failed to read first line: %s", err.Error())
 			return errors.New(req_log.ErrorMsg)
 		}
+		firstline = append(firstline, bufline...)
+		if lineprefix == false {
+			break
+		}
+	}
+	// The first line came through intact
+	// Apply validating regex
+	bufstr := string(firstline)
+	matches := req_re.FindStringSubmatch(string(bufstr))
+	if matches != nil {
+		req_log.Header.Method = string(matches[1])
+		req_log.Header.Path = string(matches[2])
+		req_log.Header.Version = string(matches[3])
 	} else {
 		req_log.ReqError = true
-		req_log.ErrorMsg = fmt.Sprintf("Failed to read first line: %s", err.Error())
+		req_log.ErrorMsg = "Request header failed regex validation"
 		return errors.New(req_log.ErrorMsg)
 	}
 
 	// Read any (optional) headers until first blank line indicating the end of the headers
 	for {
-		bufline, lineprefix, err := bufreader.ReadLine()
-		if err != nil {
-			req_log.ReqError = true
-			req_log.ErrorMsg = fmt.Sprintf("Failed to read line: %s", err.Error())
-			return errors.New(req_log.ErrorMsg)
+		var fullline []byte
+		for {
+			bufline, lineprefix, err := bufreader.ReadLine()
+			if err != nil {
+				req_log.ReqError = true
+				req_log.ErrorMsg = fmt.Sprintf("Failed to read line: %s", err.Error())
+				return errors.New(req_log.ErrorMsg)
+			}
+			fullline = append(fullline, bufline...)
+			if lineprefix == false {
+				break
+			}
 		}
-		if lineprefix == true {
-			req_log.ReqError = true
-			req_log.ErrorMsg = "Found truncated header"
-			return errors.New(req_log.ErrorMsg)
-		}
-		bufstr := string(bufline)
+		bufstr := string(fullline)
 		if bufstr == "" {
 			// This is a blank line so it's last
 			break
