@@ -16,6 +16,7 @@ import (
 	"sync"
 	"encoding/json"
 	"runtime"
+	"sort"
 	// "runtime/pprof" // for profiling code
 )
 
@@ -31,6 +32,7 @@ type ListenInfo struct {
 	TLS         bool
 	TLSCert     string
 	TLSKey      string
+	Resolved    *net.TCPAddr
 	Socket      net.Listener
 }
 
@@ -126,6 +128,13 @@ type Config struct {
 }
 
 
+// Sorting of the ListenList
+type SortListen []ListenInfo
+func (a SortListen) Len() int           {return len(a)}
+func (a SortListen) Swap(i, j int)      {a[i], a[j] = a[j], a[i]}
+func (a SortListen) Less(i, j int) bool {return a[i].Resolved.String() < a[j].Resolved.String()}
+
+
 func main() {
 
 	// Setup the stop channel signal handler
@@ -197,6 +206,25 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	AppLogger(errors.New(fmt.Sprintf("Now running with with %d max threads", runtime.GOMAXPROCS(0))))
 
+
+	// Before we can work with the ListenList (like with Daemonization)
+	// we need to resolve all the addresses and then sort the whole list
+	for i, _ := range ListenList {
+		// Get a pointer to the listen info
+		Li := &(ListenList[i])
+
+		var err error
+		// Get the TCPAddr
+		listenAddrstring := fmt.Sprintf("%s:%s", (*Li).Host, (*Li).Port)
+
+		(*Li).Resolved, err = net.ResolveTCPAddr((*Li).Proto, listenAddrstring)
+		if err != nil {
+			AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address for %s: %s", listenAddrstring, err.Error())))
+			FatalAbort(false, -1)
+		}
+	}
+	sort.Sort(SortListen(ListenList)) // Put the list in a canonical order
+
 	// Check if we should daemonize
 	if *Daemonize == true {
 		pid, err := DaemonizeProc()
@@ -221,6 +249,8 @@ func main() {
         // Start the log channel
         go writeLogger(*LogChanLen)
 
+
+
 	// Iterate over the sockets we want to listen on
 	stopacceptmutex := &sync.RWMutex{}
 	stopaccept := false
@@ -229,23 +259,35 @@ func main() {
 		// Get a pointer to the listen info
 		Li := &(ListenList[i])
 
-		// Get the TCPAddr
-		listenAddrstring := fmt.Sprintf("%s:%s", (*Li).Host, (*Li).Port)
+		// If we're the daemonized child we get our sockets passed to us
+		if *Daemonize == true {
+			// Sockets are offset 4 into the list
+			socketf := os.NewFile(uintptr(i + 4), "socket")
 
-		listenAddr, err := net.ResolveTCPAddr((*Li).Proto, listenAddrstring)
-		if err != nil {
-			AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address for %s: %s", listenAddrstring, err.Error())))
-			FatalAbort(false, -1)
+			(*Li).Socket, err = net.FileListener(socketf)
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Could not recover listener from passed filehandle: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+
+			// Getting a listener from the passed filehandle lets us close the passed handle
+			err = socketf.Close()
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to close passed filehandle: %s", err.Error()))
+				FatalAbort(false, -1)
+			}
+
+			AppLogger(errors.New(fmt.Sprintf("Daemon now listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
+		} else {
+			//listen for incoming connections
+			(*Li).Socket, err = net.ListenTCP((*Li).Proto, (*Li).Resolved)
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+			AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
 		}
 
-		//listen for incoming connections
-		(*Li).Socket, err = net.ListenTCP((*Li).Proto, listenAddr)
-		if err != nil {
-			AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
-			FatalAbort(false, -1)
-		}
-
-		AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
 
 		if (*Li).TLS == true {
 			// Make sure listener-specific cert, key are both set or unset
@@ -819,6 +861,31 @@ func DaemonizeProc() (*int, error) {
 
 		attrs.Files = []uintptr{f_devnull.Fd(), f_devnull.Fd(), f_devnull.Fd(), pipew.Fd()}
 
+		// Open all of our sockets to pass to the child
+		for i, _ := range ListenList {
+			// Get a pointer to the listen info
+			Li := &(ListenList[i])
+
+			//listen for incoming connections
+			TCPSocket, err := net.ListenTCP((*Li).Proto, (*Li).Resolved)
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+			(*Li).Socket = TCPSocket
+
+			AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
+
+			TCPSoFile, err := TCPSocket.File()
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Could not get listener file: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+
+			// Push this file descriptor onto the list we're going to pass
+			attrs.Files = append(attrs.Files, TCPSoFile.Fd())
+		}
+
 		// Tell the next process it's the deamon
 		os.Setenv(*DaemonEnvVar, "true")
 
@@ -912,6 +979,19 @@ func DaemonizeProc() (*int, error) {
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to close launch side write pipe: %s", err.Error()))
 			return nil, err
+		}
+
+		// Loop over all the sockets we made on this side and close them
+		for i, _ := range ListenList {
+			Li := &(ListenList[i])
+
+			err := (*Li).Socket.Close()
+
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Unable to close socket for %s %s/%s: %s",
+					(*Li).Host, (*Li).Proto, (*Li).Port, err.Error())))
+				FatalAbort(false, -1)
+			}
 		}
 
 		fmt.Fprintln(os.Stderr, fmt.Sprintf("Daemon started as PID %d", pid))
