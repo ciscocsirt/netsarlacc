@@ -5,6 +5,8 @@ import (
         "fmt"
         "os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"syscall"
 	"time"
         "net"
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"encoding/json"
 	"runtime"
+	"sort"
 	// "runtime/pprof" // for profiling code
 )
 
@@ -29,6 +32,7 @@ type ListenInfo struct {
 	TLS         bool
 	TLSCert     string
 	TLSKey      string
+	Resolved    *net.TCPAddr
 	Socket      net.Listener
 }
 
@@ -56,6 +60,7 @@ var (
         SinkholeInstance   = flag.String("name", getInstanceName(), "The sinkhole instance name")
 	Daemonize          = flag.Bool("daemonize", false, "Daemonize the sinkhole")
 	DaemonEnvVar       = flag.String("daemon-env-var", "_NETSARLACC_DAEMON", "Environment variable to use for daemonization")
+	DUser              = flag.String("user", "", "Drop privileges to this user when daemonizing")
 	LogClientErrors    = flag.Bool("log-client-errors", false, "Report client-based errors to syslog / stderr")
 	LogBaseName        = flag.String("log-prefix", "sinkhole", "Log files will start with this name")
 	LogChanLen         = flag.Int("log-buffer-len", 4096, "Maximum number of buffered log entries")
@@ -101,6 +106,7 @@ var (
 type Config struct {
 	Daemonize          bool
 	DaemonEnvVar       string
+	DaemonUser         string
 	UseLocaltime       bool
 	LogClientErrors    bool
 	ClientReadTimeout  int
@@ -120,6 +126,13 @@ type Config struct {
 	TLSKey             string
 	ListenList         []ListenInfo
 }
+
+
+// Sorting of the ListenList
+type SortListen []ListenInfo
+func (a SortListen) Len() int           {return len(a)}
+func (a SortListen) Swap(i, j int)      {a[i], a[j] = a[j], a[i]}
+func (a SortListen) Less(i, j int) bool {return a[i].Resolved.String() < a[j].Resolved.String()}
 
 
 func main() {
@@ -179,6 +192,11 @@ func main() {
 		FatalAbort(false, -1)
 	}
 
+	// If a user was specified but we're not daemonizing it will be ignored
+	if ((*Daemonize == false) && (*DUser != "")) {
+		AppLogger(errors.New("The user parameter can only be used when daemonizing, ignoring!"))
+	}
+
 	// Announce that we're starting
 	AppLogger(errors.New(fmt.Sprintf("Starting sinkhole instance %s", *SinkholeInstance)))
 
@@ -187,6 +205,25 @@ func main() {
 	AppLogger(errors.New(fmt.Sprintf("Started with %d max threads", runtime.GOMAXPROCS(0))))
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	AppLogger(errors.New(fmt.Sprintf("Now running with with %d max threads", runtime.GOMAXPROCS(0))))
+
+
+	// Before we can work with the ListenList (like with Daemonization)
+	// we need to resolve all the addresses and then sort the whole list
+	for i, _ := range ListenList {
+		// Get a pointer to the listen info
+		Li := &(ListenList[i])
+
+		var err error
+		// Get the TCPAddr
+		listenAddrstring := fmt.Sprintf("%s:%s", (*Li).Host, (*Li).Port)
+
+		(*Li).Resolved, err = net.ResolveTCPAddr((*Li).Proto, listenAddrstring)
+		if err != nil {
+			AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address for %s: %s", listenAddrstring, err.Error())))
+			FatalAbort(false, -1)
+		}
+	}
+	sort.Sort(SortListen(ListenList)) // Put the list in a canonical order
 
 	// Check if we should daemonize
 	if *Daemonize == true {
@@ -212,6 +249,8 @@ func main() {
         // Start the log channel
         go writeLogger(*LogChanLen)
 
+
+
 	// Iterate over the sockets we want to listen on
 	stopacceptmutex := &sync.RWMutex{}
 	stopaccept := false
@@ -220,23 +259,35 @@ func main() {
 		// Get a pointer to the listen info
 		Li := &(ListenList[i])
 
-		// Get the TCPAddr
-		listenAddrstring := fmt.Sprintf("%s:%s", (*Li).Host, (*Li).Port)
+		// If we're the daemonized child we get our sockets passed to us
+		if *Daemonize == true {
+			// Sockets are offset 4 into the list
+			socketf := os.NewFile(uintptr(i + 4), "socket")
 
-		listenAddr, err := net.ResolveTCPAddr((*Li).Proto, listenAddrstring)
-		if err != nil {
-			AppLogger(errors.New(fmt.Sprintf("Unable to resolve listening address for %s: %s", listenAddrstring, err.Error())))
-			FatalAbort(false, -1)
+			(*Li).Socket, err = net.FileListener(socketf)
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Could not recover listener from passed filehandle: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+
+			// Getting a listener from the passed filehandle lets us close the passed handle
+			err = socketf.Close()
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to close passed filehandle: %s", err.Error()))
+				FatalAbort(false, -1)
+			}
+
+			AppLogger(errors.New(fmt.Sprintf("Daemon now listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
+		} else {
+			//listen for incoming connections
+			(*Li).Socket, err = net.ListenTCP((*Li).Proto, (*Li).Resolved)
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+			AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
 		}
 
-		//listen for incoming connections
-		(*Li).Socket, err = net.ListenTCP((*Li).Proto, listenAddr)
-		if err != nil {
-			AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
-			FatalAbort(false, -1)
-		}
-
-		AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
 
 		if (*Li).TLS == true {
 			// Make sure listener-specific cert, key are both set or unset
@@ -589,6 +640,9 @@ func LoadConfig(filename string) error {
 	if conf.DaemonEnvVar != "" {
 		DaemonEnvVar     = &(conf.DaemonEnvVar)
 	}
+	if conf.DaemonUser != "" {
+		DUser     = &(conf.DaemonUser)
+	}
 	if conf.LogPrefix != "" {
 		LogBaseName      = &(conf.LogPrefix)
 	}
@@ -666,7 +720,7 @@ func DaemonizeProc() (*int, error) {
 		AppLogger(errors.New(fmt.Sprintf("Daemon got a PID of %d", pid)))
 
 		// Now open our PID file, get a lock, and write our PID to it
-		PidFile, err = os.OpenFile(pathPIDFile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile(pathPIDFile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0666)
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
 			return nil, err
@@ -733,7 +787,7 @@ func DaemonizeProc() (*int, error) {
 		var err error
 		// First we'll try to open and acquire a lock on the pid file
 		// to ensure there isn't a daemon already running
-		PidFile, err = os.OpenFile(pathPIDFile, os.O_RDONLY|os.O_CREATE, 0644)
+		PidFile, err = os.OpenFile(pathPIDFile, os.O_RDONLY|os.O_CREATE, 0666) // 0666 so root and other user can read/write
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to open pid file: %s", err.Error()))
 			return nil, err
@@ -774,14 +828,19 @@ func DaemonizeProc() (*int, error) {
 			return nil, err
 		}
 
-		// Get our exename and full path
-		exe, err := Fullpath(os.Args[0])
+		// Get our the current path to this executable
+		exe, err := filepath.Abs(os.Args[0])
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to get full path of exe: %s", err.Error()))
 			return nil, err
 		}
 
-		var attrs syscall.ProcAttr
+		var attrs syscall.ProcAttr       // The broad process attributes
+		var sysattrs syscall.SysProcAttr // The fine grained process starting attributes
+		var syscreds syscall.Credential  // The credentials for the new process
+
+		attrs.Sys = &sysattrs
+		attrs.Sys.Credential = &syscreds
 
 		// Start new process with cwd of /
 		attrs.Dir = "/"
@@ -802,11 +861,75 @@ func DaemonizeProc() (*int, error) {
 
 		attrs.Files = []uintptr{f_devnull.Fd(), f_devnull.Fd(), f_devnull.Fd(), pipew.Fd()}
 
+		// Open all of our sockets to pass to the child
+		for i, _ := range ListenList {
+			// Get a pointer to the listen info
+			Li := &(ListenList[i])
+
+			//listen for incoming connections
+			TCPSocket, err := net.ListenTCP((*Li).Proto, (*Li).Resolved)
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Error listening: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+			(*Li).Socket = TCPSocket
+
+			AppLogger(errors.New(fmt.Sprintf("Listening on %s %s/%s", (*Li).Host, (*Li).Proto, (*Li).Port)))
+
+			TCPSoFile, err := TCPSocket.File()
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Could not get listener file: %s", err.Error())))
+				FatalAbort(false, -1)
+			}
+
+			// Push this file descriptor onto the list we're going to pass
+			attrs.Files = append(attrs.Files, TCPSoFile.Fd())
+		}
+
 		// Tell the next process it's the deamon
 		os.Setenv(*DaemonEnvVar, "true")
 
 		// Copy our environment to the proc attributes
 		attrs.Env = os.Environ()
+
+		// Ask new process to setsid
+		attrs.Sys.Setsid = false
+
+		// Ask new process to detact from tty
+		attrs.Sys.Noctty = false
+
+		// Set new process used and group uid / gid
+		var userInfo *user.User
+		if *DUser != "" {
+			// Set to new user
+			userInfo, err = user.Lookup(*DUser)
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to lookup new daemon user info: %s", err.Error()))
+				return nil, err
+			}
+		} else {
+			// Set to current user
+			userInfo, err = user.Current()
+			if err != nil {
+				err = errors.New(fmt.Sprintf("Unable to lookup current daemon user info: %s", err.Error()))
+				return nil, err
+			}
+		}
+
+		uUid, err := strconv.ParseUint(userInfo.Uid, 10, 32)
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to parse Uid: %s", err.Error()))
+			return nil, err
+		}
+
+		uGid, err := strconv.ParseUint(userInfo.Gid, 10, 32)
+		if err != nil {
+			err = errors.New(fmt.Sprintf("Unable to parse Gid: %s", err.Error()))
+			return nil, err
+		}
+
+		attrs.Sys.Credential.Uid = uint32(uUid)
+		attrs.Sys.Credential.Gid = uint32(uGid)
 
 		// Try to start up the deamon process
 		pid, _, err := syscall.StartProcess(exe, os.Args, &attrs)
@@ -856,6 +979,19 @@ func DaemonizeProc() (*int, error) {
 		if err != nil {
 			err = errors.New(fmt.Sprintf("Unable to close launch side write pipe: %s", err.Error()))
 			return nil, err
+		}
+
+		// Loop over all the sockets we made on this side and close them
+		for i, _ := range ListenList {
+			Li := &(ListenList[i])
+
+			err := (*Li).Socket.Close()
+
+			if err != nil {
+				AppLogger(errors.New(fmt.Sprintf("Unable to close socket for %s %s/%s: %s",
+					(*Li).Host, (*Li).Proto, (*Li).Port, err.Error())))
+				FatalAbort(false, -1)
+			}
 		}
 
 		fmt.Fprintln(os.Stderr, fmt.Sprintf("Daemon started as PID %d", pid))
