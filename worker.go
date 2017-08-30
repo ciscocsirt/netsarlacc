@@ -280,10 +280,14 @@ func (w *Worker) Read() {
 			case read := <-w.WorkQueue:
 
 				var err error
+				// Get the read.Buffer ready to recieve slice data
+				read.Buffer = make([]byte, 0, 8192)
+				read.BufferSize = 0
+				read.Err = nil
 
-				// Make enough space to recieve client bytes
-				read.Buffer = make([]byte, 8192)
-
+				// Read deadlines are an abosolute time in the future after which
+				// all reads fail with a timeout.  We can set this once for the socket
+				// and not have to re-set it while we do reads in a loop
 				err = read.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*ClientReadTimeout)))
 				if err != nil {
 					err = errors.New(fmt.Sprintf("Unable to set read deadline on socket: %s", err.Error()))
@@ -293,11 +297,27 @@ func (w *Worker) Read() {
 					break
 				}
 
-				read.BufferSize, err = read.Conn.Read(read.Buffer)
-				if err != nil {
-					err = errors.New(fmt.Sprintf("Unable to read from socket: %s", err.Error()))
+				// Make enough space to recieve client bytes
+				tmpBuf := make([]byte, 8192)
+
+				// As long as the buffer doesn't have a \r\n\r\n in it
+				// keep trying to read on the socket until we hit the deadline
+				for {
+					tmpLen, err := read.Conn.Read(tmpBuf)
+					if err != nil {
+						read.Err = errors.New(fmt.Sprintf("Unable to read from socket: %s", err.Error()))
+						break
+					}
+
+					// Add the data we read to the buffer
+					read.Buffer = append(read.Buffer, tmpBuf[0:tmpLen]...)
+					read.BufferSize += tmpLen
+
+					// Check if we have seen a \r\n\r\n yet
+					if strings.LastIndex(string(read.Buffer), "\r\n\r\n") >= 0 {
+						break
+					}
 				}
-				read.Err = err
 
 				// Now that we've tried to read, queue the rest of the work
 				QueueWork(read)
