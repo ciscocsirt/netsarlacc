@@ -68,6 +68,7 @@ var (
 	WorkChanLen        = flag.Int("worker-queue-len", 32, "Maximum number of queued read connections to work on")
 	ClientReadTimeout  = flag.Int("client-read-timeout", 500, "Number of milliseconds before giving up trying to read client request")
 	ClientWriteTimeout = flag.Int("client-write-timeout", 500, "Number of milliseconds before giving up trying to write client response")
+	MaxClientBytes     = flag.Int("max-client-bytes", 65535, "Maximum number of bytes to process from a client")
 	UseLocaltime       = flag.Bool("use-localtime", false, "Use the local time (and timezone) instead of UTC")
 	Stopchan = make(chan os.Signal, 1)
 	Daemonized = false
@@ -111,6 +112,7 @@ type Config struct {
 	LogClientErrors    bool
 	ClientReadTimeout  int
 	ClientWriteTimeout int
+	MaxClientBytes     int
 	Workers            int
 	Readers            int
 	LogBufferLen       int
@@ -189,6 +191,12 @@ func main() {
 	// Make sure the client write timeout parameter isn't stupid
 	if *ClientWriteTimeout < 1 {
 		AppLogger(errors.New("The client write timeout must be at least 1 millisecond"))
+		FatalAbort(false, -1)
+	}
+
+	// Make sure the client write timeout parameter isn't stupid
+	if *MaxClientBytes < 256 {
+		AppLogger(errors.New("The maximum client bytes must be at least 256"))
 		FatalAbort(false, -1)
 	}
 
@@ -634,6 +642,12 @@ func LoadConfig(filename string) error {
 	// override default or cmdline param
 	if conf.ClientWriteTimeout > 0 {
 		ClientWriteTimeout = &(conf.ClientWriteTimeout)
+	}
+
+	// Allow not specifying the max client bytes
+	// override default or cmdline param
+	if conf.MaxClientBytes > 0 {
+		MaxClientBytes = &(conf.MaxClientBytes)
 	}
 
 	// Now copy any non-blank / non-nil values to our flag vars
