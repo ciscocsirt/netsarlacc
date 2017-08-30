@@ -313,11 +313,23 @@ func (w *Worker) Read() {
 					read.Buffer = append(read.Buffer, tmpBuf[0:tmpLen]...)
 					read.BufferSize += tmpLen
 
+					// Don't let the client exceed our byte limit
+					if read.BufferSize > *MaxClientBytes {
+						read.Err = errors.New(fmt.Sprintf("Client exceeded maximum bytes of %d", *MaxClientBytes))
+						read.BufferSize = *MaxClientBytes
+						break
+					} else if read.BufferSize == *MaxClientBytes {
+						break
+					}
+
 					// Check if we have seen a \r\n\r\n yet
 					if strings.LastIndex(string(read.Buffer), "\r\n\r\n") >= 0 {
 						break
 					}
 				}
+
+				// Truncate slice
+				read.Buffer = read.Buffer[0:read.BufferSize]
 
 				// Now that we've tried to read, queue the rest of the work
 				QueueWork(read)
