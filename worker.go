@@ -28,7 +28,7 @@ var (
 	// We'll allow any header name as long as it starts with a letter and any non-emtpy value
 	// RFC2616 section 4.2 is very specific about how to treat whitespace
 	// https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
-	header_re = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*):\s*([!-~\s]+?)\s*$`)
+	header_re = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*):\s*([!-~\s]+?)\s*$`)
 )
 
 
