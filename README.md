@@ -1,4 +1,5 @@
-netsarlacc
+<img src="https://raw.githubusercontent.com/ciscocsirt/netsarlacc/master/assets/netsarlacc_logo.svg?sanitize=true" width="256px">
+
 ===================
 
 netsarlacc is a high performance enterprise HTTP (and SMTP) sinkhole designed to be used by corporate SOC or IR teams.  netsarlacc was designed with several purpose-specific goals in mind:
