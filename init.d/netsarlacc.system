@@ -1,0 +1,14 @@
+[Unit]
+Description=Netsarlacc Service
+After=network.target
+
+[Service]
+Type=simple
+User=netsarlacc
+Group=netsarlacc
+WorkingDirectory=$HOME/go
+Restart=on-failure
+ExecStart=/home/go/bin/netsarlacc --daemonize true --workers 4 --WorkingDirectory "/home/go/src/github.com/netsarlacc" --log
+
+[Install]
+WantedBy=multi-user.target
